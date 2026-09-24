@@ -1,0 +1,8 @@
+{:engram.db/conn        {:path "data/engram"}
+ :engram.db/migrated    {:conn #ig/ref :engram.db/conn
+                         :path "data/engram"}
+ :engram.config/config  {:path "deploy/engram-config.example.edn"}
+ :engram.web/handler    {:db     #ig/ref :engram.db/migrated
+                         :config #ig/ref :engram.config/config}
+ :engram.web/server     {:handler #ig/ref :engram.web/handler
+                         :port 8080}}

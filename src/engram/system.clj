@@ -1,0 +1,43 @@
+(ns engram.system
+  "Integrant components: conn → migrated → config → handler → server.
+
+  This process IS the database. Halting the connection flushes LMDB. The
+  migrated component reopens the connection after migrations because Datalevin
+  builds its full-text engine from the schema present at connection-open time."
+  (:require [datalevin.core :as d]
+            [engram.config :as config]
+            [engram.handler :as handler]
+            [engram.migrations :as migrations]
+            [integrant.core :as ig]
+            [org.httpkit.server :as hk]
+            [syncopate.core :as sc]))
+
+(defn- data-path [path] (or (System/getenv "ENGRAM_DATA_DIR") path))
+
+(defmethod ig/init-key :engram.db/conn [_ {:keys [path]}]
+  (d/get-conn (data-path path)))
+
+(defmethod ig/halt-key! :engram.db/conn [_ conn]
+  ;; may already be closed — :engram.db/migrated reopens and closes this one
+  (try (d/close conn) (catch Exception _)))
+
+(defmethod ig/init-key :engram.db/migrated [_ {:keys [conn path]}]
+  (sc/migrate-all! (sc/store conn) migrations/migrations)
+  (d/close conn)
+  (d/get-conn (data-path path)))
+
+(defmethod ig/halt-key! :engram.db/migrated [_ conn]
+  (try (d/close conn) (catch Exception _)))
+
+(defmethod ig/init-key :engram.config/config [_ {:keys [path]}]
+  (config/load-config (or (System/getenv "ENGRAM_CONFIG") path)))
+
+(defmethod ig/init-key :engram.web/handler [_ {:keys [db config]}]
+  (handler/app db config))
+
+(defmethod ig/init-key :engram.web/server [_ {:keys [handler port]}]
+  (hk/run-server handler {:port (parse-long (or (System/getenv "PORT") (str port)))
+                          :legacy-return-value? false}))
+
+(defmethod ig/halt-key! :engram.web/server [_ server]
+  (hk/server-stop! server))

@@ -1,0 +1,17 @@
+# Convenience compose for a single-host deployment. The admin supplies the
+# category config and the authorized_keys file as mounts; only the SSH port is
+# published. Point your ~/.ssh/config `Host engram` at localhost:2222.
+services:
+  engram:
+    build: .
+    ports:
+      - "2222:22"
+    volumes:
+      - engram-data:/data
+      - ./deploy/engram-config.example.edn:/config/engram-config.edn:ro
+      - ./deploy/authorized_keys:/home/engram/.ssh/authorized_keys:ro
+      - ./backups:/backups
+    restart: unless-stopped
+
+volumes:
+  engram-data:

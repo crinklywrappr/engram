@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Start the engram server on localhost, then run sshd in the foreground. Only
+# the SSH port is exposed. Clients reach the REST API through engram-proxy, which
+# sshd runs as a forced command per authorized_keys line.
+set -euo pipefail
+
+# Host keys (idempotent).
+ssh-keygen -A
+
+# sshd is strict about ownership and permissions of authorized_keys.
+if [ -d /home/engram/.ssh ]; then
+  chown engram:engram /home/engram/.ssh || true
+  chmod 700 /home/engram/.ssh || true
+fi
+if [ -f /home/engram/.ssh/authorized_keys ]; then
+  chmod 600 /home/engram/.ssh/authorized_keys || true
+fi
+
+# The server writes LMDB under /data (owned by engram). Run it as engram.
+su engram -s /bin/bash -c "java ${JAVA_OPTS} -jar /app/engram.jar" &
+
+# sshd in the foreground is PID 1's child; -e logs to stderr.
+exec /usr/sbin/sshd -D -e

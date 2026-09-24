@@ -1,0 +1,16 @@
+;; engram category config — admin-authored, mounted at deploy time.
+;;
+;; :half-life-days sets the exponential decay for the recent request count.
+;; :configurations is an array of acceptable configurations. Each is a map of
+;; category to a cardinality shorthand: "1" exactly one, "?" zero or one,
+;; "*" zero or more, "+" one or more. A memory is valid if its category:label
+;; pairs satisfy ANY ONE configuration. Categories are closed to what appears
+;; here. Labels are open vocabulary but must be lowercase kebab-case.
+;;
+;; src (exactly one) and related (zero or more) are imposed by the server and
+;; must NOT appear here.
+;;
+;; The categories below are seeded from the user-level CLAUDE.md tag vocabulary.
+{:half-life-days 14
+ :configurations
+ [{"scope" "?" "domain" "+" "project" "*" "tech" "*" "activity" "*" "status" "?"}]}

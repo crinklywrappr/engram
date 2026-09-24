@@ -1,0 +1,11 @@
+# engram authorized_keys — the admin edits this by hand and mounts it at
+# /home/engram/.ssh/authorized_keys.
+#
+# One line per trusted user. The trailing comment is the human-readable owner;
+# the user id engram stores memories under is the --user value in the forced
+# command. Every line MUST start with command="engram-proxy --user <id>",
+# otherwise that key would get an interactive shell.
+#
+# The restrictions after the command harden the key further.
+command="engram-proxy --user alice",no-pty,no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA_REPLACE_WITH_ALICE_KEY alice@example
+command="engram-proxy --user bob",no-pty,no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA_REPLACE_WITH_BOB_KEY bob@example

@@ -1,0 +1,60 @@
+#!/usr/bin/env bb
+;; engram-proxy — the SSH forced-command that gives the REST server its trusted
+;; user identity. babashka ships the http-kit client.
+;;
+;; authorized_keys entry (one per trusted user; the comment IS the user id):
+;;
+;;   command="engram-proxy --user alice",no-pty,no-port-forwarding,no-X11-forwarding,no-agent-forwarding <ssh-key> alice
+;;
+;; The client speaks one request per SSH connection:
+;;
+;;   ssh engram POST /memories/query < body.json      (POST/PUT: body on stdin)
+;;   ssh engram GET  /config        < /dev/null       (GET: empty stdin)
+;;
+;; sshd puts "POST /memories/query" in SSH_ORIGINAL_COMMAND. This script adds the
+;; trusted X-Engram-User header (the user can never set it themselves) and calls
+;; the server on localhost. The response body streams to stdout; the HTTP status
+;; goes to stderr as "HTTP <code>"; the exit code is 0 for 2xx and 1 otherwise,
+;; so a 409 (config refresh) is visible to the client as a non-zero exit with the
+;; fresh config on stdout.
+(require '[org.httpkit.client :as http]
+         '[clojure.java.io :as io]
+         '[clojure.string :as str])
+
+(defn- arg-value [args flag]
+  (second (drop-while #(not= flag %) args)))
+
+(defn -main [& args]
+  (let [user (arg-value args "--user")
+        cmd  (or (System/getenv "SSH_ORIGINAL_COMMAND")
+                 (str/join " " (remove #{"--user" user} args)))
+        [method path] (str/split (str/trim (or cmd "")) #"\s+" 2)
+        port (or (System/getenv "ENGRAM_PORT") "8080")]
+    (when (or (str/blank? user) (str/blank? method) (str/blank? path))
+      (binding [*out* *err*]
+        (println "usage: engram-proxy --user <id>  (METHOD and PATH via SSH_ORIGINAL_COMMAND)"))
+      (System/exit 2))
+    (let [raw  (slurp *in*)
+          body (when-not (str/blank? raw) raw)
+          resp @(http/request
+                 {:url     (str "http://127.0.0.1:" port path)
+                  :method  (keyword (str/lower-case method))
+                  ;; Always ask for NDJSON: the fetch route streams it (constant
+                  ;; server memory); /config and /stats have no NDJSON encoder, so
+                  ;; muuntaja falls back to JSON for them.
+                  :headers (cond-> {"X-Engram-User" user
+                                    "Accept" "application/x-ndjson"}
+                             body (assoc "Content-Type" "application/json"))
+                  :body    body
+                  :as      :stream})]
+      (when-let [err (:error resp)]
+        (binding [*out* *err*] (println "engram-proxy: cannot reach server:" (str err)))
+        (System/exit 3))
+      (let [status (:status resp)]
+        (binding [*out* *err*] (println (str "HTTP " status)))
+        (with-open [in (:body resp)]
+          (io/copy in System/out))
+        (flush)
+        (System/exit (if (<= 200 status 299) 0 1))))))
+
+(apply -main *command-line-args*)

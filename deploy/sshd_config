@@ -1,0 +1,12 @@
+# engram sshd drop-in. Public-key only, one unix account, no shells or
+# forwarding. Identity and the allowed action come from each authorized_keys
+# line's forced command, so every key is confined to engram-proxy.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AllowUsers engram
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+PermitTunnel no
