@@ -36,6 +36,26 @@
   (testing "a non-kebab label fails"
     (is (= "label-format" (:error (config/validate cfg [["domain" "Clojure_X"]]))))))
 
+;; ---------- kebab token rule (labels, src, related) ----------
+
+(deftest kebab-token-rule
+  (testing "valid kebab tokens are accepted"
+    (doseq [s ["clojure" "datalevin" "foo-bar-2" "clojure-1-12" "d3"]]
+      (is (config/kebab? s) s)))
+  (testing "invalid tokens are rejected"
+    (doseq [s ["Clojure" "node.js" "c++" "a_b" "a/b" "-x" "x-" "a--b" "3d" "a b"]]
+      (is (not (config/kebab? s)) s))))
+
+(deftest token-error-src-and-related
+  (testing "a valid src and related pass"
+    (is (nil? (config/token-error {:src "good-src" :related ["a-b" "c"]}))))
+  (testing "a malformed src is a src-format error"
+    (is (= "src-format" (:error (config/token-error {:src "Bad_Src"})))))
+  (testing "a malformed related is a related-format error"
+    (is (= "related-format" (:error (config/token-error {:src "ok" :related ["a" "Bad!"]})))))
+  (testing "related does not require the src to exist (feedback item 5)"
+    (is (nil? (config/token-error {:src "ok" :related ["does-not-exist"]})))))
+
 ;; ---------- memory: create, transitive query, isolation ----------
 
 (deftest transitive-query-and-isolation
@@ -160,4 +180,21 @@
         (testing "the owner's delete returns 200"
           (is (= 200 (:status (request app :delete (str "/memories/" id)
                                        {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest handler-token-format
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (testing "a malformed src returns 409"
+        (is (= 409 (:status (request app :post "/memories"
+                                     {:user "alice" :accept "application/json"
+                                      :body {:content "x" :src "Bad_Src"
+                                             :tags [["domain" "clojure"]]}})))))
+      (testing "a malformed related returns 409"
+        (is (= 409 (:status (request app :post "/memories"
+                                     {:user "alice" :accept "application/json"
+                                      :body {:content "x" :src "ok"
+                                             :tags [["domain" "clojure"]]
+                                             :related ["Bad!"]}})))))
       (finally (d/close conn)))))

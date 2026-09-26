@@ -60,7 +60,8 @@
       (str/blank? content) {:status 400 :body {:error "content is required"}}
       (str/blank? src)     {:status 400 :body {:error "src is required"}}
       :else
-      (if-let [err (config/validate cfg (or tags []))]
+      (if-let [err (or (config/token-error {:src src :related related})
+                       (config/validate cfg (or tags [])))]
         {:status 409 :body (assoc err :configurations (:configurations cfg))}
         {:status 201
          :body {:id (memory/create! conn user {:content content :src src :tags tags
@@ -70,7 +71,8 @@
   (let [user (:engram/user req)
         id   (get-in req [:path-params :id])
         {:keys [content tags related]} (:body-params req)]
-    (if-let [err (and tags (config/validate cfg tags))]
+    (if-let [err (or (config/token-error {:related related})
+                     (and tags (config/validate cfg tags)))]
       {:status 409 :body (assoc err :configurations (:configurations cfg))}
       (if (memory/update! conn user id {:content content :tags tags :related related})
         {:status 200 :body {:id id}}

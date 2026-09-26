@@ -66,8 +66,10 @@ Rules:
 - `src` is the source identity. Atomic facts split from one source share a src.
 - `related` links to other memories by their `src`. The server follows these
   links transitively on a fetch.
-- Labels must be lowercase kebab-case. Do not create near-duplicate labels, for
-  example `cost-analysis` and `my-cost-analysis`. Reuse an existing label.
+- Labels, `src`, and each `related` value must be lowercase kebab-case tokens: a
+  lowercase letter, then lowercase letters, digits, or hyphens. A leading digit,
+  uppercase, a dot, and a plus are rejected. Do not create near-duplicate labels,
+  for example `cost-analysis` and `my-cost-analysis`. Reuse an existing label.
 - Categories are closed to the configuration. `src` and `related` are not categories.
 
 engram keeps no history. To correct a fact, edit it in place with
