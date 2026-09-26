@@ -55,7 +55,7 @@
 
 (defn- create-handler [conn cfg req]
   (let [user (:engram/user req)
-        {:keys [content src tags related supersedes]} (:body-params req)]
+        {:keys [content src tags related]} (:body-params req)]
     (cond
       (str/blank? content) {:status 400 :body {:error "content is required"}}
       (str/blank? src)     {:status 400 :body {:error "src is required"}}
@@ -64,7 +64,7 @@
         {:status 409 :body (assoc err :configurations (:configurations cfg))}
         {:status 201
          :body {:id (memory/create! conn user {:content content :src src :tags tags
-                                               :related related :supersedes supersedes})}}))))
+                                               :related related})}}))))
 
 (defn- update-handler [conn cfg req]
   (let [user (:engram/user req)
@@ -75,6 +75,13 @@
       (if (memory/update! conn user id {:content content :tags tags :related related})
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
+
+(defn- delete-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:path-params :id])]
+    (if (memory/delete! conn user id)
+      {:status 200 :body {:deleted id}}
+      {:status 404 :body {:error "not found"}})))
 
 (defn app
   "Build the ring handler over the (opaque) db conn and the loaded config."
@@ -94,7 +101,8 @@
                                                                   (:half-life-days cfg)))}})}]
       ["/memories"       {:post (fn [req] (create-handler conn cfg req))}]
       ["/memories/query" {:post (fn [req] (query-handler conn cfg req))}]
-      ["/memories/:id"   {:put  (fn [req] (update-handler conn cfg req))}]]]
+      ["/memories/:id"   {:put    (fn [req] (update-handler conn cfg req))
+                          :delete (fn [req] (delete-handler conn req))}]]]
     {:conflicts nil
      :data {:muuntaja mc/instance
             :middleware [parameters/parameters-middleware

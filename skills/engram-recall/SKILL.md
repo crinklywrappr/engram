@@ -57,8 +57,7 @@ configuration. Keep this in mind for the rest of the session.
 {"content": "one fact stated plainly",
  "src": "kebab-source-id",
  "tags": [["domain","clojure"],["tech","datalevin"]],
- "related": ["another-src"],
- "supersedes": ["<memory-id>"]}
+ "related": ["another-src"]}
 ```
 
 Rules:
@@ -67,14 +66,14 @@ Rules:
 - `src` is the source identity. Atomic facts split from one source share a src.
 - `related` links to other memories by their `src`. The server follows these
   links transitively on a fetch.
-- `supersedes` marks prior memory ids as replaced. The server hides a superseded
-  memory from reads. When a new fact corrects a prior one, list the prior id here.
 - Labels must be lowercase kebab-case. Do not create near-duplicate labels, for
   example `cost-analysis` and `my-cost-analysis`. Reuse an existing label.
 - Categories are closed to the configuration. `src` and `related` are not categories.
 
-Correct a fact in place with `PUT /memories/<id>` and the same body shape
-(without `src`).
+engram keeps no history. To correct a fact, edit it in place with
+`PUT /memories/<id>` using the same body shape without `src`. To remove a fact,
+delete it with `DELETE /memories/<id>`. A delete returns 200, and a delete of a
+memory that is not yours returns 404.
 
 ## When a write returns 409
 

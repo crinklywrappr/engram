@@ -4,7 +4,7 @@
 ;; stored as component tag entities so datalog can match a pair and stats can
 ;; group by it. `related` holds the src values this fact links to; the query
 ;; walks that graph transitively. `content` is full-text indexed so a future
-;; supersede-detection or search feature can use it (not on the recall path).
+;; search feature can use it (not on the recall path).
 ;;
 ;; A stat row counts, per (user, category, label), how often a pair was fetched:
 ;; a monotonic lifetime count and an exponential-decay recent count. `:stat/key`
@@ -17,7 +17,6 @@
                :memory/src         {:db/valueType :db.type/string}
                :memory/tag         {:db/valueType :db.type/ref     :db/cardinality :db.cardinality/many :db/isComponent true}
                :memory/related     {:db/valueType :db.type/string  :db/cardinality :db.cardinality/many}
-               :memory/superseded? {:db/valueType :db.type/boolean}
                :memory/created-at  {:db/valueType :db.type/instant}
                :memory/updated-at  {:db/valueType :db.type/instant}
                :tag/category       {:db/valueType :db.type/string}

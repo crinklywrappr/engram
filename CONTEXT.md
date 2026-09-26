@@ -47,11 +47,6 @@ _Avoid_: schema, config, ruleset
 How many labels of a category a memory can carry: `1`, `?`, `*`, or `+`.
 _Avoid_: multiplicity, arity
 
-**Superseded**:
-The state of a memory that a newer fact replaced. A superseded memory is
-hidden from normal reads.
-_Avoid_: deleted, archived, stale
-
 **User**:
 The owner of a set of memories, identified by an SSH key. The key comment is the
 user id. Memories are private to their user.

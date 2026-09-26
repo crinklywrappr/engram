@@ -30,23 +30,19 @@
 ;; ---------- writes ----------
 
 (defn create!
-  "Create one atomic fact for `user`. `supersedes` is a seq of memory-id strings
-  to mark superseded (hidden from reads). Returns the new id as a string."
-  [conn user {:keys [content src tags related supersedes]}]
+  "Create one atomic fact for `user`. Returns the new id as a string."
+  [conn user {:keys [content src tags related]}]
   (let [id  (UUID/randomUUID)
         now (Date.)
         mem (cond-> {:memory/id id
                      :memory/user user
                      :memory/content content
                      :memory/src src
-                     :memory/superseded? false
                      :memory/created-at now
                      :memory/updated-at now}
               (seq tags)    (assoc :memory/tag (mapv tag-tx tags))
-              (seq related) (assoc :memory/related (vec related)))
-        supersede-tx (for [sid supersedes]
-                       {:memory/id (UUID/fromString sid) :memory/superseded? true})]
-    (d/transact! conn (into [mem] supersede-tx))
+              (seq related) (assoc :memory/related (vec related)))]
+    (d/transact! conn [mem])
     (str id)))
 
 (defn- eid-of [db user id-str]
@@ -73,13 +69,22 @@
         (d/transact! conn (concat retracts [base]))
         id))))
 
+(defn delete!
+  "Delete `user`'s own memory. Retracting the entity also retracts its component
+  tags. Returns the id string, or nil when the memory does not exist for this
+  user."
+  [conn user id]
+  (let [eid (eid-of (d/db conn) user id)]
+    (when eid
+      (d/transact! conn [[:db/retractEntity eid]])
+      id)))
+
 ;; ---------- query ----------
 
 (defn- eids-by-pair [db user [category label]]
   (d/q '[:find [?e ...]
          :in $ ?u ?c ?l
          :where [?e :memory/user ?u]
-                [?e :memory/superseded? false]
                 [?e :memory/tag ?t]
                 [?t :tag/category ?c]
                 [?t :tag/label ?l]]
@@ -90,7 +95,6 @@
     (d/q '[:find [?e ...]
            :in $ ?u [?s ...]
            :where [?e :memory/user ?u]
-                  [?e :memory/superseded? false]
                   [?e :memory/src ?s]]
          db user (vec srcs))
     []))

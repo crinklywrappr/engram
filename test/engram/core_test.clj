@@ -60,17 +60,28 @@
           (is (not (some #(= "bob secret" (:content %)) rows)))))
       (finally (d/close conn)))))
 
-(deftest supersede-hides
+(deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
-      (let [id (memory/create! conn "alice" {:content "old" :src "s"
+      (let [id (memory/create! conn "alice" {:content "temp" :src "s"
                                              :tags [["domain" "clojure"]]})]
-        (memory/create! conn "alice" {:content "new" :src "s"
-                                      :tags [["domain" "clojure"]] :supersedes [id]})
-        (let [contents (set (map :content (memory/query conn "alice" [["domain" "clojure"]])))]
-          (testing "superseded memory is hidden, replacement is visible"
-            (is (contains? contents "new"))
-            (is (not (contains? contents "old"))))))
+        (testing "the memory is present before the delete"
+          (is (= 1 (count (memory/query conn "alice" [["domain" "clojure"]])))))
+        (testing "delete removes it and returns the id"
+          (is (= id (memory/delete! conn "alice" id)))
+          (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
+      (finally (d/close conn)))))
+
+(deftest delete-missing-and-isolation
+  (let [conn (fresh-conn)]
+    (try
+      (testing "deleting a missing id returns nil"
+        (is (nil? (memory/delete! conn "alice" (str (java.util.UUID/randomUUID))))))
+      (let [id (memory/create! conn "alice" {:content "alice only" :src "s"
+                                             :tags [["domain" "clojure"]]})]
+        (testing "another user cannot delete it, and it survives"
+          (is (nil? (memory/delete! conn "bob" id)))
+          (is (= 1 (count (memory/query conn "alice" [["domain" "clojure"]]))))))
       (finally (d/close conn)))))
 
 ;; ---------- stats ----------
@@ -133,4 +144,20 @@
           (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper))))
           (is (some #(= "prefer ==" (:content (json/read-value % json/keyword-keys-object-mapper)))
                     (rest lines)))))
+      (finally (d/close conn)))))
+
+(deftest handler-delete
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (let [resp (request app :post "/memories"
+                          {:user "alice" :accept "application/json"
+                           :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})
+            id   (:id (body-json resp))]
+        (testing "another user's delete returns 404"
+          (is (= 404 (:status (request app :delete (str "/memories/" id)
+                                       {:user "bob" :accept "application/json"})))))
+        (testing "the owner's delete returns 200"
+          (is (= 200 (:status (request app :delete (str "/memories/" id)
+                                       {:user "alice" :accept "application/json"}))))))
       (finally (d/close conn)))))
