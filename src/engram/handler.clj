@@ -15,7 +15,8 @@
             [reitit.ring.middleware.parameters :as parameters]
             [reitit.swagger :as swagger]
             [reitit.swagger-ui :as swagger-ui]
-            [ring.util.io :as rio]))
+            [ring.util.io :as rio]
+            [taoensso.telemere :as t]))
 
 (defn- wrap-user
   "Require the trusted X-Engram-User header. Its value is the request's user id."
@@ -24,6 +25,39 @@
     (if-let [u (get-in req [:headers "x-engram-user"])]
       (handler (assoc req :engram/user u))
       {:status 401 :body {:error "missing X-Engram-User"}})))
+
+(defn- wrap-log
+  "Log one info line per request: user, method, path, status, and duration in
+  milliseconds. It logs no memory content and no private data beyond the user id."
+  [handler]
+  (fn [req]
+    (let [start (System/nanoTime)
+          resp  (handler req)
+          ms    (quot (- (System/nanoTime) start) 1000000)]
+      (t/log! {:level :info :id ::request
+               :data {:user   (get-in req [:headers "x-engram-user"] "-")
+                      :method (name (:request-method req))
+                      :path   (:uri req)
+                      :status (:status resp)
+                      :ms     ms}}
+              "request")
+      resp)))
+
+(defn- wrap-error
+  "Catch an unhandled error, log it, and return 500. Logs the user and path, not
+  the request body."
+  [handler]
+  (fn [req]
+    (try
+      (handler req)
+      (catch Throwable e
+        (t/log! {:level :error :id ::error :error e
+                 :data {:user (get-in req [:headers "x-engram-user"] "-")
+                        :path (:uri req)}}
+                "handler error")
+        {:status 500
+         :headers {"Content-Type" "application/json"}
+         :body (json/write-value-as-string {:error "internal error"})}))))
 
 (defn- ndjson-response
   "Stream a header line, then one JSON line per memory, without truncation and
@@ -62,7 +96,8 @@
       :else
       (if-let [err (or (config/token-error {:src src :related related})
                        (config/validate cfg (or tags [])))]
-        {:status 409 :body (assoc err :configurations (:configurations cfg))}
+        (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:error err)}} "rejected")
+            {:status 409 :body (assoc err :configurations (:configurations cfg))})
         {:status 201
          :body {:id (memory/create! conn user {:content content :src src :tags tags
                                                :related related})}}))))
@@ -73,7 +108,8 @@
         {:keys [content tags related]} (:body-params req)]
     (if-let [err (or (config/token-error {:related related})
                      (and tags (config/validate cfg tags)))]
-      {:status 409 :body (assoc err :configurations (:configurations cfg))}
+      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:error err)}} "rejected")
+          {:status 409 :body (assoc err :configurations (:configurations cfg))})
       (if (memory/update! conn user id {:content content :tags tags :related related})
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
@@ -88,7 +124,7 @@
 (defn app
   "Build the ring handler over the (opaque) db conn and the loaded config."
   [conn cfg]
-  (ring/ring-handler
+  (-> (ring/ring-handler
    (ring/router
     [["/swagger.json"
       {:get {:no-doc true
@@ -111,4 +147,6 @@
                          muuntaja/format-middleware]}})
    (ring/routes
     (swagger-ui/create-swagger-ui-handler {:path "/api-docs" :url "/swagger.json"})
-    (ring/create-default-handler))))
+    (ring/create-default-handler)))
+      wrap-error
+      wrap-log))
