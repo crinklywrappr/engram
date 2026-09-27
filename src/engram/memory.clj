@@ -6,7 +6,8 @@
   user, so one user never sees another's memories. A query matches memories by
   category:label pairs, then walks the related-by-src graph transitively to pull
   in linked memories the pairs did not name."
-  (:require [datalevin.core :as d])
+  (:require [datalevin.core :as d]
+            [clojure.set :as st])
   (:import [java.util UUID Date]))
 
 (def ^:private pull-pattern
@@ -82,44 +83,56 @@
 ;; ---------- query ----------
 
 (defn- eids-by-pair [db user [category label]]
-  (d/q '[:find [?e ...]
+  (d/q '[:find ?e (distinct ?r)
          :in $ ?u ?c ?l
          :where [?e :memory/user ?u]
                 [?e :memory/tag ?t]
                 [?t :tag/category ?c]
-                [?t :tag/label ?l]]
+                [?t :tag/label ?l]
+         (or-join [?e ?r]
+                  [?e :memory/related ?r]
+                  (and (not-join [?e] [?e :memory/related _])
+                       [(ground :none) ?r]))]
        db user category label))
 
 (defn- eids-by-srcs [db user srcs]
   (if (seq srcs)
-    (d/q '[:find [?e ...]
+    (d/q '[:find ?e (distinct ?r)
            :in $ ?u [?s ...]
            :where [?e :memory/user ?u]
-                  [?e :memory/src ?s]]
+                  [?e :memory/src ?s]
+           (or-join [?e ?r]
+                    [?e :memory/related ?r]
+                    (and (not-join [?e] [?e :memory/related _])
+                         [(ground :none) ?r]))]
          db user (vec srcs))
     []))
 
-(defn- related-srcs [db eids]
-  (if (seq eids)
-    (into #{} (d/q '[:find [?r ...]
-                     :in $ [?e ...]
-                     :where [?e :memory/related ?r]]
-                   db (vec eids)))
-    #{}))
+(defn query' [db user seen unseen related xs]
+  (cond
+    (seq unseen)
+    (loop [[[eid related'] & unseen'] unseen]
+      (cond
+        (nil? eid) (lazy-seq (query' db user seen [] related xs))
+        (seen eid) (recur unseen')
+        :else (cons (->wire (d/pull db pull-pattern eid))
+                    (lazy-seq
+                     (query' db user (conj seen eid) unseen'
+                             (st/union related related') xs)))))
+
+    (seq xs)
+    (let [[[f x] & xs'] xs]
+      (recur db user seen (f x) related xs'))
+
+    (seq related)
+    (recur db user seen unseen #{}
+           (conj xs [(partial eids-by-srcs db user)
+                     (disj related :none)]))))
 
 (defn query
   "Return a lazy seq of wire memories: the pair matches for `user` plus the
   transitive related-by-src closure, deduped. Responses are not truncated."
   [conn user pairs]
-  (let [db   (d/db conn)
-        seed (into #{} (mapcat #(eids-by-pair db user %) pairs))]
-    (loop [result    seed
-           seen-srcs #{}
-           frontier  (related-srcs db seed)]
-      (let [new-srcs (remove seen-srcs frontier)]
-        (if (empty? new-srcs)
-          (map (fn [e] (->wire (d/pull db pull-pattern e))) result)
-          (let [more (remove result (eids-by-srcs db user new-srcs))]
-            (recur (into result more)
-                   (into seen-srcs new-srcs)
-                   (related-srcs db more))))))))
+  (let [db (d/db conn)
+        f (partial eids-by-pair db user)]
+    (query' db user #{} [] #{} (map (partial vector f) pairs))))

@@ -69,13 +69,44 @@
           (is (not (some #(= "bob secret" (:content %)) rows)))))
       (finally (d/close conn)))))
 
+(deftest query-traversal-shapes
+  (testing "a cycle terminates and returns both nodes"
+    (let [conn (fresh-conn)]
+      (try
+        (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]] :related ["c2"]})
+        (memory/create! conn "alice" {:content "c2" :src "c2" :tags [["misc" "m"]] :related ["c1"]})
+        (is (= #{"c1" "c2"} (set (map :src (memory/query conn "alice" [["domain" "clojure"]])))))
+        (finally (d/close conn)))))
+  (testing "a diamond returns the shared child once"
+    (let [conn (fresh-conn)]
+      (try
+        (memory/create! conn "alice" {:content "m1" :src "m1" :tags [["domain" "clojure"]] :related ["x"]})
+        (memory/create! conn "alice" {:content "m2" :src "m2" :tags [["domain" "clojure"]] :related ["x"]})
+        (memory/create! conn "alice" {:content "x" :src "x" :tags [["misc" "m"]]})
+        (let [srcs (map :src (memory/query conn "alice" [["domain" "clojure"]]))]
+          (is (= #{"m1" "m2" "x"} (set srcs)))
+          (is (== 1 (count (filter #{"x"} srcs)))))
+        (finally (d/close conn)))))
+  (testing "a self-loop returns the memory once and terminates"
+    (let [conn (fresh-conn)]
+      (try
+        (memory/create! conn "alice" {:content "s" :src "s" :tags [["domain" "clojure"]] :related ["s"]})
+        (is (= ["s"] (map :src (memory/query conn "alice" [["domain" "clojure"]]))))
+        (finally (d/close conn)))))
+  (testing "a related pointing at a nonexistent src yields nothing extra"
+    (let [conn (fresh-conn)]
+      (try
+        (memory/create! conn "alice" {:content "g" :src "g" :tags [["domain" "clojure"]] :related ["ghost"]})
+        (is (= #{"g"} (set (map :src (memory/query conn "alice" [["domain" "clojure"]])))))
+        (finally (d/close conn))))))
+
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
       (let [id (memory/create! conn "alice" {:content "temp" :src "s"
                                              :tags [["domain" "clojure"]]})]
         (testing "the memory is present before the delete"
-          (is (= 1 (count (memory/query conn "alice" [["domain" "clojure"]])))))
+          (is (== 1 (count (memory/query conn "alice" [["domain" "clojure"]])))))
         (testing "delete removes it and returns the id"
           (is (= id (memory/delete! conn "alice" id)))
           (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
@@ -164,11 +195,11 @@
                            :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})
             id   (:id (body-json resp))]
         (testing "another user's delete returns 404"
-          (is (= 404 (:status (request app :delete (str "/memories/" id)
-                                       {:user "bob" :accept "application/json"})))))
+          (is (== 404 (:status (request app :delete (str "/memories/" id)
+                                        {:user "bob" :accept "application/json"})))))
         (testing "the owner's delete returns 200"
-          (is (= 200 (:status (request app :delete (str "/memories/" id)
-                                       {:user "alice" :accept "application/json"}))))))
+          (is (== 200 (:status (request app :delete (str "/memories/" id)
+                                        {:user "alice" :accept "application/json"}))))))
       (finally (d/close conn)))))
 
 (deftest handler-token-format
@@ -176,14 +207,14 @@
         app  (handler/app conn cfg)]
     (try
       (testing "a malformed src returns 400 (coercion)"
-        (is (= 400 (:status (request app :post "/memories"
-                                     {:user "alice" :accept "application/json"
-                                      :body {:content "x" :src "Bad_Src"
-                                             :tags [["domain" "clojure"]]}})))))
+        (is (== 400 (:status (request app :post "/memories"
+                                      {:user "alice" :accept "application/json"
+                                       :body {:content "x" :src "Bad_Src"
+                                              :tags [["domain" "clojure"]]}})))))
       (testing "a malformed related returns 400 (coercion)"
-        (is (= 400 (:status (request app :post "/memories"
-                                     {:user "alice" :accept "application/json"
-                                      :body {:content "x" :src "ok"
-                                             :tags [["domain" "clojure"]]
-                                             :related ["Bad!"]}})))))
+        (is (== 400 (:status (request app :post "/memories"
+                                      {:user "alice" :accept "application/json"
+                                       :body {:content "x" :src "ok"
+                                              :tags [["domain" "clojure"]]
+                                              :related ["Bad!"]}})))))
       (finally (d/close conn)))))
