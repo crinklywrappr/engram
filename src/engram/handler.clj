@@ -51,6 +51,7 @@
       (handler (assoc req :engram/user u))
       {:status 401 :body {:error "missing X-Engram-User"}})))
 
+;; TODO: too noisy: remove
 (defn- wrap-log
   "Log one info line per request: user, method, path, status, and duration in
   milliseconds. It logs no memory content and no private data beyond the user id."
@@ -68,6 +69,7 @@
               "request")
       resp)))
 
+;; TODO: needs additional information to be useful.  correct place to log?
 (defn- wrap-error
   "Catch an unhandled error, log it, and return 500. Logs the user and path, not
   the request body."
@@ -142,29 +144,36 @@
       {:status 200 :body {:deleted id}}
       {:status 404 :body {:error "not found"}})))
 
+(defn- routes
+  "The reitit route table, closing over the db conn and the loaded config."
+  [conn cfg]
+  [["/swagger.json"
+    {:get {:no-doc true
+           :swagger {:info {:title "engram" :version "0.1.0"
+                            :description "Per-user atomic-fact memory server."}}
+           :handler (swagger/create-swagger-handler)}}]
+   ["/healthz" {:get (fn [_] {:status 200 :body {:status "ok"}})}]
+   ;; The "" prefix adds no path segment; it groups the child routes so that
+   ;; wrap-user gates all of them and leaves /healthz and /swagger.json open.
+   ["" {:middleware [wrap-user]}
+    ["/config" {:get (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}]
+    ["/stats"  {:get (fn [req] {:status 200
+                                :body {:stats (vec (stats/stats conn (:engram/user req)
+                                                                (:half-life-days cfg)))}})}]
+    ["/memories"       {:post {:parameters {:body CreateBody}
+                               :handler (fn [req] (create-handler conn cfg req))}}]
+    ["/memories/query" {:post {:parameters {:body QueryBody}
+                               :handler (fn [req] (query-handler conn cfg req))}}]
+    ["/memories/:id"   {:put    {:parameters {:body UpdateBody}
+                                 :handler (fn [req] (update-handler conn cfg req))}
+                        :delete (fn [req] (delete-handler conn req))}]]])
+
 (defn app
   "Build the ring handler over the (opaque) db conn and the loaded config."
   [conn cfg]
   (-> (ring/ring-handler
        (ring/router
-        [["/swagger.json"
-          {:get {:no-doc true
-                 :swagger {:info {:title "engram" :version "0.1.0"
-                                  :description "Per-user atomic-fact memory server."}}
-                 :handler (swagger/create-swagger-handler)}}]
-         ["/healthz" {:get (fn [_] {:status 200 :body {:status "ok"}})}]
-         ["" {:middleware [wrap-user]}
-          ["/config" {:get (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}]
-          ["/stats"  {:get (fn [req] {:status 200
-                                      :body {:stats (vec (stats/stats conn (:engram/user req)
-                                                                      (:half-life-days cfg)))}})}]
-          ["/memories"       {:post {:parameters {:body CreateBody}
-                                     :handler (fn [req] (create-handler conn cfg req))}}]
-          ["/memories/query" {:post {:parameters {:body QueryBody}
-                                     :handler (fn [req] (query-handler conn cfg req))}}]
-          ["/memories/:id"   {:put    {:parameters {:body UpdateBody}
-                                       :handler (fn [req] (update-handler conn cfg req))}
-                              :delete (fn [req] (delete-handler conn req))}]]]
+        (routes conn cfg)
         {:conflicts nil
          :data {:coercion   rcm/coercion
                 :muuntaja   mc/instance
