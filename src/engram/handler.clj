@@ -41,6 +41,30 @@
 (def ^:private QueryBody
   [:map [:pairs [:vector config/Pair]]])
 
+;; ---------- response schemas (malli coercion -> validated + swagger) ----------
+
+(def ^:private MemoryOut
+  [:map
+   [:id :string] [:content :string] [:src :string]
+   [:related [:vector :string]]
+   [:tags [:vector [:tuple :string :string]]]
+   [:created-at [:maybe :string]] [:updated-at [:maybe :string]]])
+
+(def ^:private ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
+(def ^:private StatsOut   [:map [:stats [:vector [:map [:category :string] [:label :string]
+                                                  [:lifetime :int] [:recent number?]]]]])
+(def ^:private IdOut      [:map [:id :string]])
+(def ^:private DeletedOut [:map [:deleted :string]])
+(def ^:private ErrorOut   [:map [:error :string]])
+;; 409 keeps :configurations so the client can refresh; coercion strips undeclared
+;; keys, so the schema must name every key the body carries.
+(def ^:private Conflict   [:map [:error :string] [:message :string]
+                                 [:configurations [:vector [:map-of :string :string]]]])
+;; The NDJSON fetch is a stream, which response coercion cannot check, so the
+;; query route declares no :responses. This is the JSON fallback shape.
+(def ^:private QueryOut   [:map [:pairs [:vector [:tuple :string :string]]]
+                                [:memories [:vector MemoryOut]]])
+
 ;; ---------- middleware ----------
 
 (defn- wrap-user
@@ -150,21 +174,28 @@
            :swagger {:info {:title "engram" :version "0.1.0"
                             :description "Per-user atomic-fact memory server."}}
            :handler (swagger/create-swagger-handler)}}]
-   ["/healthz" {:get (fn [_] {:status 200 :body {:status "ok"}})}]
+   ["/healthz" {:get {:responses {200 {:body [:map [:status :string]]}}
+                      :handler (fn [_] {:status 200 :body {:status "ok"}})}}]
    ;; The "" prefix adds no path segment; it groups the child routes so that
    ;; wrap-user gates all of them and leaves /healthz and /swagger.json open.
    ["" {:middleware [wrap-user]}
-    ["/config" {:get (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}]
-    ["/stats"  {:get (fn [req] {:status 200
-                                :body {:stats (vec (stats/stats conn (:engram/user req)
-                                                                (:half-life-days cfg)))}})}]
+    ["/config" {:get {:responses {200 {:body ConfigOut}}
+                      :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
+    ["/stats"  {:get {:responses {200 {:body StatsOut}}
+                      :handler (fn [req] {:status 200
+                                          :body {:stats (vec (stats/stats conn (:engram/user req)
+                                                                          (:half-life-days cfg)))}})}}]
     ["/memories"       {:post {:parameters {:body CreateBody}
+                               :responses  {201 {:body IdOut} 409 {:body Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
+    ;; No :responses: the NDJSON stream cannot be response-coerced (see QueryOut).
     ["/memories/query" {:post {:parameters {:body QueryBody}
                                :handler (fn [req] (query-handler conn cfg req))}}]
     ["/memories/:id"   {:put    {:parameters {:body UpdateBody}
+                                 :responses  {200 {:body IdOut} 404 {:body ErrorOut} 409 {:body Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
-                        :delete (fn [req] (delete-handler conn req))}]]])
+                        :delete {:responses {200 {:body DeletedOut} 404 {:body ErrorOut}}
+                                 :handler (fn [req] (delete-handler conn req))}}]]])
 
 (defn app
   "Build the ring handler over the (opaque) db conn and the loaded config."
@@ -178,6 +209,7 @@
                 :middleware [parameters/parameters-middleware
                              muuntaja/format-middleware
                              exception/exception-middleware
+                             rrc/coerce-response-middleware
                              rrc/coerce-request-middleware]}})
        (ring/routes
         (swagger-ui/create-swagger-ui-handler {:path "/api-docs" :url "/swagger.json"})

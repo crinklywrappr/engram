@@ -218,3 +218,23 @@
                                               :tags [["domain" "clojure"]]
                                               :related ["Bad!"]}})))))
       (finally (d/close conn)))))
+
+(deftest query-json-fallback-shape
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (request app :post "/memories"
+               {:user "alice" :accept "application/json"
+                :body {:content "prefer ==" :src "s" :tags [["domain" "clojure"]]}})
+      (let [resp (request app :post "/memories/query"
+                          {:user "alice" :accept "application/json"
+                           :body {:pairs [["domain" "clojure"]]}})
+            body (body-json resp)]
+        (testing "the JSON fallback returns pairs and memories"
+          (is (== 200 (:status resp)))
+          (is (vector? (:pairs body)))
+          (is (vector? (:memories body))))
+        (testing "each memory carries the wire keys"
+          (is (= #{:id :content :src :related :tags :created-at :updated-at}
+                 (set (keys (first (:memories body))))))))
+      (finally (d/close conn)))))
