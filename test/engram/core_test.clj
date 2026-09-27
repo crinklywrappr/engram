@@ -238,3 +238,21 @@
           (is (= #{:id :content :src :related :tags :created-at :updated-at}
                  (set (keys (first (:memories body))))))))
       (finally (d/close conn)))))
+
+(deftest error-logging-and-correlation-id
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (testing "every response carries a correlation-id header"
+        (is (some? (get-in (request app :get "/healthz" {:accept "application/json"})
+                           [:headers "X-Engram-Request-Id"]))))
+      (testing "a handler error returns 500 with the correlation id in body and header"
+        (with-redefs [memory/query (fn [& _] (throw (ex-info "boom" {})))]
+          (let [resp (request app :post "/memories/query"
+                              {:user "alice" :accept "application/json"
+                               :body {:pairs [["domain" "clojure"]]}})
+                body (body-json resp)]
+            (is (== 500 (:status resp)))
+            (is (some? (:id body)))
+            (is (= (:id body) (get-in resp [:headers "X-Engram-Request-Id"]))))))
+      (finally (d/close conn)))))
