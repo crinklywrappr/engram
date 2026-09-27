@@ -51,7 +51,6 @@
       (handler (assoc req :engram/user u))
       {:status 401 :body {:error "missing X-Engram-User"}})))
 
-;; TODO: too noisy: remove
 (defn- wrap-log
   "Log one info line per request: user, method, path, status, and duration in
   milliseconds. It logs no memory content and no private data beyond the user id."
@@ -69,7 +68,6 @@
               "request")
       resp)))
 
-;; TODO: needs additional information to be useful.  correct place to log?
 (defn- wrap-error
   "Catch an unhandled error, log it, and return 500. Logs the user and path, not
   the request body."
