@@ -9,11 +9,13 @@
             [engram.migrations :as migrations]
             [engram.stats :as stats]
             [jsonista.core :as json]
+            [malli.core :as m]
             [syncopate.core :as sc])
   (:import [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
 
-(def cfg (config/load-config "deploy/engram-config.example.edn"))
+(def cfg (let [c (config/load-config "deploy/engram-config.example.edn")]
+           (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defn fresh-conn
   "A migrated, reopened connection on a fresh temp dir (mirrors the system)."
@@ -24,37 +26,24 @@
     (d/close c)
     (d/get-conn dir)))
 
-;; ---------- config validation ----------
+;; ---------- tag and token validation ----------
 
-(deftest config-validation
-  (testing "a valid domain fact passes"
-    (is (nil? (config/validate cfg [["domain" "clojure"]]))))
-  (testing "a required category (domain +) missing fails"
-    (is (= "no-configuration" (:error (config/validate cfg [["tech" "datalevin"]])))))
-  (testing "an unknown category fails (categories are closed)"
-    (is (= "no-configuration" (:error (config/validate cfg [["framework" "reitit"]])))))
-  (testing "a non-kebab label fails"
-    (is (= "label-format" (:error (config/validate cfg [["domain" "Clojure_X"]]))))))
+(deftest tag-validation
+  (let [s (:tag-schema cfg)]
+    (testing "a valid domain fact passes"
+      (is (nil? (config/tag-error s [["domain" "clojure"]]))))
+    (testing "a required category (domain +) missing fails"
+      (is (= "no-configuration" (:error (config/tag-error s [["tech" "datalevin"]])))))
+    (testing "an unknown category fails (categories are closed)"
+      (is (= "no-configuration" (:error (config/tag-error s [["framework" "reitit"]])))))))
 
-;; ---------- kebab token rule (labels, src, related) ----------
-
-(deftest kebab-token-rule
-  (testing "valid kebab tokens are accepted"
+(deftest token-rule
+  (testing "valid tokens are accepted"
     (doseq [s ["clojure" "datalevin" "foo-bar-2" "clojure-1-12" "d3"]]
-      (is (config/kebab? s) s)))
+      (is (m/validate config/Token s) s)))
   (testing "invalid tokens are rejected"
     (doseq [s ["Clojure" "node.js" "c++" "a_b" "a/b" "-x" "x-" "a--b" "3d" "a b"]]
-      (is (not (config/kebab? s)) s))))
-
-(deftest token-error-src-and-related
-  (testing "a valid src and related pass"
-    (is (nil? (config/token-error {:src "good-src" :related ["a-b" "c"]}))))
-  (testing "a malformed src is a src-format error"
-    (is (= "src-format" (:error (config/token-error {:src "Bad_Src"})))))
-  (testing "a malformed related is a related-format error"
-    (is (= "related-format" (:error (config/token-error {:src "ok" :related ["a" "Bad!"]})))))
-  (testing "related does not require the src to exist (feedback item 5)"
-    (is (nil? (config/token-error {:src "ok" :related ["does-not-exist"]})))))
+      (is (not (m/validate config/Token s)) s))))
 
 ;; ---------- memory: create, transitive query, isolation ----------
 
@@ -186,13 +175,13 @@
   (let [conn (fresh-conn)
         app  (handler/app conn cfg)]
     (try
-      (testing "a malformed src returns 409"
-        (is (= 409 (:status (request app :post "/memories"
+      (testing "a malformed src returns 400 (coercion)"
+        (is (= 400 (:status (request app :post "/memories"
                                      {:user "alice" :accept "application/json"
                                       :body {:content "x" :src "Bad_Src"
                                              :tags [["domain" "clojure"]]}})))))
-      (testing "a malformed related returns 409"
-        (is (= 409 (:status (request app :post "/memories"
+      (testing "a malformed related returns 400 (coercion)"
+        (is (= 400 (:status (request app :post "/memories"
                                      {:user "alice" :accept "application/json"
                                       :body {:content "x" :src "ok"
                                              :tags [["domain" "clojure"]]

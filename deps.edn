@@ -5,6 +5,7 @@
          integrant/integrant                 {:mvn/version "1.0.1"}
          http-kit/http-kit                   {:mvn/version "2.8.0"}
          metosin/reitit                      {:mvn/version "0.7.2"}
+         metosin/malli                       {:mvn/version "0.16.4"}
          metosin/jsonista                    {:mvn/version "0.3.8"}
          com.taoensso/telemere               {:mvn/version "1.0.1"}}
  :aliases

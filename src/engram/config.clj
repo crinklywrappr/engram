@@ -2,80 +2,60 @@
   "The admin-authored category config, loaded from a mounted EDN file (not
   shipped with the server). It holds the stats half-life and an array of
   acceptable configurations. A configuration is a map of category to a
-  cardinality shorthand. A memory is valid if its category:label pairs satisfy
-  any one configuration.
+  cardinality shorthand.
 
-  Categories are closed to the configurations. Labels are open vocabulary but
-  must be lowercase kebab-case (a fixed server rule). `src` and `related` are
-  imposed by the server and never appear in a configuration, but they must still
-  be valid kebab tokens, which `token-error` checks."
-  (:require [clojure.edn :as edn]))
+  Validation is malli. `compile-tag-schema` turns the configurations into a
+  schema once at load time. A memory is valid when its category:label pairs,
+  normalized to a category->labels map, satisfy any one configuration. Categories
+  are closed to the configurations. Labels, `src`, and `related` are lowercase
+  kebab-case tokens (`Token`), checked at the route boundary by request coercion."
+  (:require [clojure.edn :as edn]
+            [malli.core :as m]))
+
+;; A token is lowercase kebab-case that also reads as a Clojure keyword literal:
+;; a lowercase letter, then lowercase letters or digits in hyphen-joined words.
+;; The regex is anchored because malli `:re` uses `re-find`, not `re-matches`.
+(def token-regex #"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+(def Token [:re token-regex])
+(def Pair [:tuple Token Token])                 ; a [category label] pair
 
 (defn load-config
   "Read the config map {:half-life-days n :configurations [{cat card} ...]}."
   [path]
   (edn/read-string (slurp path)))
 
-(defn kebab?
-  "True when s is a lowercase kebab-case token that also reads as a Clojure
-  keyword literal. Derived from the reader grammar: a keyword name begins with a
-  non-numeric character, so once narrowed to lowercase kebab-case the token is a
-  lowercase letter followed by lowercase letters or digits in hyphen-joined
-  words. This rejects a leading digit, uppercase, and punctuation such as a dot,
-  a plus, an underscore, or a slash."
-  [s]
-  (boolean (and (string? s) (re-matches #"[a-z][a-z0-9]*(?:-[a-z0-9]+)*" s))))
-
-(defn- cardinality-ok? [card cnt]
+(defn- cardinality->vector [card]
   (case card
-    "1" (= cnt 1)
-    "?" (<= cnt 1)
-    "*" true
-    "+" (pos? cnt)
-    false))
+    "1" [:vector {:min 1 :max 1} Token]
+    "?" [:vector {:max 1} Token]
+    "*" [:vector Token]
+    "+" [:vector {:min 1} Token]))
 
-(defn- configuration-matches?
-  "True when the category counts satisfy this configuration: every category the
-  memory uses is allowed (closed set) and every configured cardinality holds."
-  [configuration cat->count]
-  (and (every? #(contains? configuration %) (keys cat->count))
-       (every? (fn [[c card]] (cardinality-ok? card (get cat->count c 0)))
-               configuration)))
+(defn- configuration->schema
+  "One closed map schema for a configuration. A category is a required key for
+  cardinality `1` or `+`, and an optional key for `?` or `*`."
+  [configuration]
+  (into [:map {:closed true}]
+        (map (fn [[category card]]
+               [category (if (#{"1" "+"} card) {} {:optional true})
+                (cardinality->vector card)])
+             configuration)))
 
-(defn token-error
-  "Return nil when `src` (when present) and every `related` value are valid kebab
-  tokens, else a map describing the first bad one. These are server-imposed, so
-  they are checked here rather than against a configuration."
-  [{:keys [src related]}]
-  (let [bad-related (seq (remove kebab? (or related [])))]
-    (cond
-      (and (some? src) (not (kebab? src)))
-      {:error "src-format"
-       :message "src must be a lowercase kebab-case token"
-       :offending src}
+(defn compile-tag-schema
+  "Compile the acceptable configurations into one malli schema, once at load
+  time. A memory matches when it satisfies any one configuration."
+  [config]
+  (m/schema (into [:or] (map configuration->schema (:configurations config)))))
 
-      bad-related
-      {:error "related-format"
-       :message "related entries must be lowercase kebab-case tokens"
-       :offending (vec bad-related)}
+(defn- normalize
+  "Group a memory's flat [category label] pairs into a category->[labels] map."
+  [tags]
+  (reduce (fn [m [c l]] (update m c (fnil conj []) l)) {} tags))
 
-      :else nil)))
-
-(defn validate
-  "Return nil when the tags are valid, else a map describing the first failure.
-  `tags` is a seq of [category label] pairs, excluding the server-imposed src
-  and related."
-  [config tags]
-  (let [bad (seq (filter (fn [[_ l]] (not (kebab? l))) tags))
-        cat->count (frequencies (map first tags))]
-    (cond
-      bad
-      {:error "label-format"
-       :message "labels must be lowercase kebab-case"
-       :offending (mapv second bad)}
-
-      (not (some #(configuration-matches? % cat->count) (:configurations config)))
-      {:error "no-configuration"
-       :message "the category:label set matches no acceptable configuration"}
-
-      :else nil)))
+(defn tag-error
+  "Return nil when `tags` satisfy the compiled schema, else a 409 error map. The
+  caller adds the configurations to the body so the client can refresh."
+  [tag-schema tags]
+  (when-not (m/validate tag-schema (normalize tags))
+    {:error "no-configuration"
+     :message "the category:label set matches no acceptable configuration"}))

@@ -30,7 +30,8 @@
   (try (d/close conn) (catch Exception _)))
 
 (defmethod ig/init-key :engram.config/config [_ {:keys [path]}]
-  (config/load-config (or (System/getenv "ENGRAM_CONFIG") path)))
+  (let [c (config/load-config (or (System/getenv "ENGRAM_CONFIG") path))]
+    (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defmethod ig/init-key :engram.web/handler [_ {:keys [db config]}]
   (handler/app db config))
