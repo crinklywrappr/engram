@@ -41,6 +41,28 @@
 (def ^:private QueryBody
   [:map [:pairs [:vector config/Pair]]])
 
+;; A memory id on the wire: the string form of a UUID. Anchored, because malli
+;; `:re` uses `re-find`. A non-uuid id is a malformed op -> 400 at coercion.
+(def ^:private IdStr
+  [:re #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"])
+
+(def ^:private UpdatePayload
+  [:map
+   [:id IdStr]
+   [:content {:optional true} [:string {:min 1}]]
+   [:tags {:optional true} [:vector config/Pair]]
+   [:related {:optional true} [:vector config/Token]]])
+
+;; The batch body: an ordered list of grouped [verb, payloads] runs. The verb
+;; dispatches the payload shape, so a malformed op or an unknown verb is a 400.
+(def ^:private BatchBody
+  [:map
+   [:ops [:vector
+          [:multi {:dispatch first}
+           ["create" [:tuple [:= "create"] [:vector CreateBody]]]
+           ["update" [:tuple [:= "update"] [:vector UpdatePayload]]]
+           ["delete" [:tuple [:= "delete"] [:vector IdStr]]]]]]])
+
 ;; ---------- response schemas (malli coercion -> validated + swagger) ----------
 
 (def ^:private MemoryOut
@@ -64,6 +86,15 @@
 ;; query route declares no :responses. This is the JSON fallback shape.
 (def ^:private QueryOut   [:map [:pairs [:vector [:tuple :string :string]]]
                                 [:memories [:vector MemoryOut]]])
+;; A passed batch echoes the new ids in create order plus an applied count. A
+;; rejected batch reports only the failing ops; declare every key an entry can
+;; carry, because response coercion strips the rest.
+(def ^:private BatchOut   [:map [:ids [:vector :string]] [:applied :int]])
+(def ^:private BatchError
+  [:map [:errors [:vector [:map
+                           [:i :int] [:op :string] [:error :string]
+                           [:message {:optional true} :string]
+                           [:configurations {:optional true} [:vector [:map-of :string :string]]]]]]])
 
 ;; ---------- middleware ----------
 
@@ -187,6 +218,31 @@
       {:status 200 :body {:deleted id}}
       {:status 404 :body {:error "not found"}})))
 
+(defn- flatten-ops
+  "Flatten grouped [verb payloads] runs into an ordered op seq, giving each op a
+  running 0-based index i across all payloads in listed order."
+  [ops]
+  (first
+   (reduce (fn [[acc i] [verb payloads]]
+             [(into acc (map-indexed (fn [j p] {:i (+ i j) :op verb :payload p}) payloads))
+              (+ i (count payloads))])
+           [[] 0] ops)))
+
+(defn- batch-handler [conn cfg req]
+  (let [user   (:engram/user req)
+        ops    (flatten-ops (get-in req [:parameters :body :ops]))
+        result (memory/apply-batch! conn user ops #(config/tag-error (:tag-schema cfg) %))]
+    (if (:ok? result)
+      {:status 200 :body {:ids (:ids result) :applied (:applied result)}}
+      (let [errors (mapv (fn [e]
+                           (cond-> e
+                             (= "no-configuration" (:error e))
+                             (assoc :configurations (:configurations cfg))))
+                         (:errors result))]
+        (t/log! {:level :warn :id ::batch-rejected
+                 :data {:user user :failed (count errors)}} "batch rejected")
+        {:status 422 :body {:errors errors}}))))
+
 (defn- routes
   "The reitit route table, closing over the db conn and the loaded config."
   [conn cfg]
@@ -209,6 +265,9 @@
     ["/memories"       {:post {:parameters {:body CreateBody}
                                :responses  {201 {:body IdOut} 409 {:body Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
+    ["/memories/batch" {:post {:parameters {:body BatchBody}
+                               :responses  {200 {:body BatchOut} 422 {:body BatchError}}
+                               :handler (fn [req] (batch-handler conn cfg req))}}]
     ;; No :responses: the NDJSON stream cannot be response-coerced (see QueryOut).
     ["/memories/query" {:post {:parameters {:body QueryBody}
                                :handler (fn [req] (query-handler conn cfg req))}}]

@@ -60,3 +60,13 @@ _Avoid_: total, hits
 The exponential-decay measure of how often a category:label pair was fetched
 lately, kept beside the lifetime count.
 _Avoid_: score, frequency, weight
+
+**Batch**:
+An ordered list of operations a client applies in one atomic call. All of the
+operations apply, or none do.
+_Avoid_: bulk, group, transaction
+
+**Operation**:
+One create, update, or delete inside a batch. Its verb names which of the three
+it is.
+_Avoid_: op, action, command
