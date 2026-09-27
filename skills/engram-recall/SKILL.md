@@ -22,6 +22,10 @@ user identity, so you never send it. The result comes back like this:
 - The line `HTTP <code>` is on stderr.
 - The exit code is 0 for a 2xx status and non-zero otherwise.
 
+The SSH connection is reused. `~/.ssh/config` sets `ControlMaster`, so the first
+`ssh engram` call opens one connection and later calls share it with no new
+handshake. Nothing here manages a socket or a port.
+
 Examples:
 
 ```bash
