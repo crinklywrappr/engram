@@ -13,9 +13,39 @@
 
 (defn- decay-factor
   "The fraction of a decayed weight that remains after `elapsed-ms`, given the
-  half-life in days."
+  half-life in days. Shared by the read path (stats) and the write path
+  (plan-fetch)."
   [half-life-days elapsed-ms]
   (Math/pow 0.5 (/ (/ (double elapsed-ms) 86400000.0) (double half-life-days))))
+
+(defn stats
+  "Return the caller's stat rows: lifetime and the recent decay count projected
+  to now."
+  [conn user half-life-days]
+  (let [db     (d/db conn)
+        now-ms (System/currentTimeMillis)]
+    (->> (d/q '[:find ?c ?l ?life ?dec ?last
+                :in $ ?u
+                :where [?s :stat/user ?u]
+                       [?s :stat/category ?c]
+                       [?s :stat/label ?l]
+                       [?s :stat/lifetime ?life]
+                       [?s :stat/decayed ?dec]
+                       [?s :stat/last-request ?last]]
+              db user)
+         (map (fn [[c l life dec ^Date last]]
+                {:category c :label l :lifetime life
+                 :recent (* (double dec)
+                            (decay-factor half-life-days (- now-ms (.getTime last))))})))))
+
+;; ---------- the stat-write consumer ----------
+;;
+;; A single agent serializes every stat write, so no two read-modify-writes
+;; interleave and no increment is lost. Its value is a pending buffer keyed by
+;; [user category label]. A request thread folds a fetch in and returns at once.
+;; A flush drains the buffer to one transaction through plan-fetch, the pure
+;; planner just below. The decay uses a clock captured at flush time, a bounded
+;; drift held as a known limit.
 
 (defn- existing [db user category label]
   (d/q '[:find [?life ?dec ?last]
@@ -46,43 +76,6 @@
              :stat/decayed  (+ base (double n))
              :stat/last-request (Date. flush-ms)}))
         pair-counts))
-
-(defn record-fetch!
-  "Record that `user` fetched each pair once: read, decay to now, and add one.
-  Delegate the tx-data to `plan-fetch` with a count of one per pair, then write."
-  [conn user half-life-days pairs]
-  (let [tx (plan-fetch (d/db conn) user half-life-days
-                       (into {} (map (fn [p] [p 1])) pairs)
-                       (System/currentTimeMillis))]
-    (when (seq tx) (d/transact! conn tx))))
-
-(defn stats
-  "Return the caller's stat rows: lifetime and the recent decay count projected
-  to now."
-  [conn user half-life-days]
-  (let [db     (d/db conn)
-        now-ms (System/currentTimeMillis)]
-    (->> (d/q '[:find ?c ?l ?life ?dec ?last
-                :in $ ?u
-                :where [?s :stat/user ?u]
-                       [?s :stat/category ?c]
-                       [?s :stat/label ?l]
-                       [?s :stat/lifetime ?life]
-                       [?s :stat/decayed ?dec]
-                       [?s :stat/last-request ?last]]
-              db user)
-         (map (fn [[c l life dec ^Date last]]
-                {:category c :label l :lifetime life
-                 :recent (* (double dec)
-                            (decay-factor half-life-days (- now-ms (.getTime last))))})))))
-
-;; ---------- the stat-write consumer ----------
-;;
-;; A single agent serializes every stat write, so no two read-modify-writes
-;; interleave and no increment is lost. Its value is a pending buffer keyed by
-;; [user category label]. A request thread folds a fetch in and returns at once.
-;; A flush drains the buffer to one transaction through plan-fetch. The decay
-;; uses a clock captured at flush time, a bounded drift held as a known limit.
 
 (defn- fold
   "Fold one fetch into the pending buffer, adding one to each pair's count."

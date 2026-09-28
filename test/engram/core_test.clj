@@ -130,6 +130,14 @@
 (def ^:private create-tag-err #(config/create-tag-error (:tag-schema cfg) %))
 (def ^:private update-tag-err #(config/update-tag-error (:tag-schema cfg) %))
 
+(defn- seed-fetch!
+  "Synchronously record one fetch of each pair, for test setup. Writes through
+  plan-fetch at a count of one, the same tx a single fetch produces."
+  [conn user half-life pairs]
+  (d/transact! conn (stats/plan-fetch (d/db conn) user half-life
+                                      (into {} (map (fn [p] [p 1])) pairs)
+                                      (System/currentTimeMillis))))
+
 (deftest batch-all-pass
   (let [conn (fresh-conn)]
     (try
@@ -281,8 +289,8 @@
 (deftest stats-lifetime-and-recent
   (let [conn (fresh-conn)]
     (try
-      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
-      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
       (let [row (first (stats/stats conn "alice" 14))]
         (testing "lifetime counts every fetch"
           (is (= 2 (:lifetime row))))
@@ -339,7 +347,7 @@
 (deftest plan-fetch-pure-and-coalesced
   (let [conn (fresh-conn)]
     (try
-      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
+      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
       (let [db (d/db conn)]
         (testing "a coalesced count adds to the prior lifetime and decayed weight"
           (let [tx (stats/plan-fetch db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
@@ -359,9 +367,9 @@
 (deftest stats-injective-across-user-space
   (let [conn (fresh-conn)]
     (try
-      (stats/record-fetch! conn "alice one" 14 [["domain" "clojure"]])
-      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
-      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (seed-fetch! conn "alice one" 14 [["domain" "clojure"]])
+      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
       (testing "user ids that differ by a space keep separate rows via the composite tuple"
         (is (= 1 (:lifetime (first (stats/stats conn "alice one" 14)))))
         (is (= 2 (:lifetime (first (stats/stats conn "alice" 14))))))
