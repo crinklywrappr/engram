@@ -556,6 +556,22 @@
                  (set (keys (first (:memories body))))))))
       (finally (d/close conn)))))
 
+(deftest handler-stats-nested-shape
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (seed-recall! conn "alice" (:half-life-days cfg) [["domain" "clojure"]])
+      (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
+            body (body-json resp)]
+        (testing "the stats body nests the recall rows under :stats then :recalls"
+          (is (== 200 (:status resp)))
+          (is (vector? (get-in body [:stats :recalls])))
+          (let [row (first (get-in body [:stats :recalls]))]
+            (is (= "domain" (:category row)))
+            (is (= "clojure" (:label row)))
+            (is (== 1 (:lifetime row))))))
+      (finally (d/close conn)))))
+
 (deftest error-logging-and-correlation-id
   (let [conn (fresh-conn)
         app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]

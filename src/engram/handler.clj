@@ -74,8 +74,12 @@
    [:created-at [:maybe :string]] [:updated-at [:maybe :string]]])
 
 (def ^:private ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
-(def ^:private StatsOut   [:map [:stats [:vector [:map [:category :string] [:label :string]
-                                                  [:lifetime :int] [:recent number?]]]]])
+;; /stats nests the recall rows under :stats then :recalls, so a later stat type
+;; can sit beside recalls without breaking the envelope. Response coercion strips
+;; undeclared keys, so the schema names every key a row carries.
+(def ^:private StatsOut
+  [:map [:stats [:map [:recalls [:vector [:map [:category :string] [:label :string]
+                                          [:lifetime :int] [:recent number?]]]]]]])
 (def ^:private IdOut      [:map [:id :string]])
 (def ^:private DeletedOut [:map [:deleted :string]])
 (def ^:private ErrorOut   [:map [:error :string]])
@@ -264,8 +268,8 @@
                       :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
     ["/stats"  {:get {:responses {200 {:body StatsOut}}
                       :handler (fn [req] {:status 200
-                                          :body {:stats (vec (stats/recalls conn (:engram/user req)
-                                                                            (:half-life-days cfg)))}})}}]
+                                          :body {:stats {:recalls (vec (stats/recalls conn (:engram/user req)
+                                                                                      (:half-life-days cfg)))}}})}}]
     ["/memories"       {:post {:parameters {:body CreateBody}
                                :responses  {201 {:body IdOut} 409 {:body Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]

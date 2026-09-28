@@ -47,7 +47,8 @@ configuration. Keep this in mind for the rest of the session.
 
 ## Recall: two calls
 
-1. `ssh engram GET /stats` returns your `category:label` counts, each with a
+1. `ssh engram GET /stats` returns your recall counts. The body is
+   `{"stats": {"recalls": [ ... ]}}`. Each entry is a `category:label` pair with a
    `lifetime` and a `recent` value. Use them to choose the pairs worth loading.
 2. `POST /memories/query` with `{"pairs": [["category","label"], ...]}` returns
    the matching memories plus every memory linked to them through `related`,
