@@ -40,9 +40,15 @@ not POST anything yet.
 
 Once the user approves the preview:
 
-1. `POST /memories` for each fact. If a write returns 409, fix the tags against
-   the returned configuration and retry.
-2. Move the source markdown files to `~/.claude/memory-archive/<project>/`. Do
+1. Send every fact in one batch. `POST /memories/batch` with a body
+   `{"create": [ fact, fact, ... ]}`, one entry per distilled fact. Do not send a
+   call per fact.
+2. Read the result. On `HTTP 200` the body is `{"ids":[...],"applied":n}`, and the
+   migration is done. On `HTTP 422` the body is `{"errors":[...]}`, one entry per
+   bad fact, each with its index `i` in the create list. Nothing was written,
+   because the batch is atomic. A tag error carries `configurations`. Replace your
+   cached configuration, fix the named facts, and resend the whole batch.
+3. Move the source markdown files to `~/.claude/memory-archive/<project>/`. Do
    not delete them. The archive is the plain-text backup.
 
 ## Notes
