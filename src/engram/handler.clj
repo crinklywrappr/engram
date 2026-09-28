@@ -201,7 +201,7 @@
 
 (defn- update-handler [conn cfg req]
   (let [user (:engram/user req)
-        id   (get-in req [:path-params :id])
+        id   (get-in req [:parameters :path :id])
         {:keys [content tags related]} (get-in req [:parameters :body])]
     (if-let [err (and (seq tags) (config/tag-error (:tag-schema cfg) tags))]
       (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:error err)}} "rejected")
@@ -212,7 +212,7 @@
 
 (defn- delete-handler [conn req]
   (let [user (:engram/user req)
-        id   (get-in req [:path-params :id])]
+        id   (get-in req [:parameters :path :id])]
     (if (memory/delete! conn user id)
       {:status 200 :body {:deleted id}}
       {:status 404 :body {:error "not found"}})))
@@ -260,10 +260,11 @@
     ;; No :responses: the NDJSON stream cannot be response-coerced (see QueryOut).
     ["/memories/query" {:post {:parameters {:body QueryBody}
                                :handler (fn [req] (query-handler conn cfg req))}}]
-    ["/memories/:id"   {:put    {:parameters {:body UpdateBody}
+    ["/memories/:id"   {:put    {:parameters {:path [:map [:id IdStr]] :body UpdateBody}
                                  :responses  {200 {:body IdOut} 404 {:body ErrorOut} 409 {:body Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
-                        :delete {:responses {200 {:body DeletedOut} 404 {:body ErrorOut}}
+                        :delete {:parameters {:path [:map [:id IdStr]]}
+                                 :responses {200 {:body DeletedOut} 404 {:body ErrorOut}}
                                  :handler (fn [req] (delete-handler conn req))}}]]])
 
 (defn app

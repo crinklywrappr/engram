@@ -338,6 +338,19 @@
                                               :related ["Bad!"]}})))))
       (finally (d/close conn)))))
 
+(deftest handler-malformed-id
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (testing "a non-uuid id on PUT is a coercion failure, returning 400"
+        (is (== 400 (:status (request app :put "/memories/not-a-uuid"
+                                      {:user "alice" :accept "application/json"
+                                       :body {:content "x"}})))))
+      (testing "a non-uuid id on DELETE is a coercion failure, returning 400"
+        (is (== 400 (:status (request app :delete "/memories/not-a-uuid"
+                                      {:user "alice" :accept "application/json"})))))
+      (finally (d/close conn)))))
+
 (deftest handler-batch
   (let [conn (fresh-conn)
         app  (handler/app conn cfg)]
