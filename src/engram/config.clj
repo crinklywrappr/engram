@@ -20,6 +20,13 @@
 (def Token [:re token-regex])
 (def Pair [:tuple Token Token])                 ; a [category label] pair
 
+(defn valid-token?
+  "True when `s` is a lowercase kebab-case token. The user id is held to this
+  shape at the request boundary, so it can never contain a space or a control
+  byte."
+  [s]
+  (m/validate Token s))
+
 (defn load-config
   "Read the config map {:half-life-days n :configurations [{cat card} ...]}."
   [path]

@@ -99,12 +99,16 @@
 ;; ---------- middleware ----------
 
 (defn- wrap-user
-  "Require the trusted X-Engram-User header. Its value is the request's user id."
+  "Require the trusted X-Engram-User header and hold it to the token shape. A
+  missing header is a 401. A malformed user id is a 400, so a space or any other
+  out-of-shape value never reaches a stat key or a query."
   [handler]
   (fn [req]
-    (if-let [u (get-in req [:headers "x-engram-user"])]
-      (handler (assoc req :engram/user u))
-      {:status 401 :body {:error "missing X-Engram-User"}})))
+    (let [u (get-in req [:headers "x-engram-user"])]
+      (cond
+        (nil? u)                      {:status 401 :body {:error "missing X-Engram-User"}}
+        (not (config/valid-token? u)) {:status 400 :body {:error "malformed X-Engram-User"}}
+        :else                         (handler (assoc req :engram/user u))))))
 
 (defn- wrap-log
   "Log one info line per request: user, method, path, status, and duration in

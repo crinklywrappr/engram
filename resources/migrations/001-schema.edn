@@ -7,8 +7,9 @@
 ;; search feature can use it (not on the recall path).
 ;;
 ;; A stat row counts, per (user, category, label), how often a pair was fetched:
-;; a monotonic lifetime count and an exponential-decay recent count. `:stat/key`
-;; is a unique identity so a fetch upserts the row.
+;; a monotonic lifetime count and an exponential-decay recent count. The
+;; composite tuple :stat/user+category+label is a unique identity, so a fetch
+;; upserts the row. There is no delimiter, so no user id can collide two rows.
 ;;
 ;; syncopate additive creation migration: :down is auto-derived.
 {:up {:schema/create {:memory/id          {:db/valueType :db.type/uuid    :db/unique :db.unique/identity}
@@ -21,10 +22,11 @@
                :memory/updated-at  {:db/valueType :db.type/instant}
                :tag/category       {:db/valueType :db.type/string}
                :tag/label          {:db/valueType :db.type/string}
-               :stat/key           {:db/valueType :db.type/string  :db/unique :db.unique/identity}
                :stat/user          {:db/valueType :db.type/string}
                :stat/category      {:db/valueType :db.type/string}
                :stat/label         {:db/valueType :db.type/string}
+               :stat/user+category+label {:db/tupleAttrs [:stat/user :stat/category :stat/label]
+                                          :db/unique :db.unique/identity}
                :stat/lifetime      {:db/valueType :db.type/long}
                :stat/decayed       {:db/valueType :db.type/double}
                :stat/last-request  {:db/valueType :db.type/instant}}}}

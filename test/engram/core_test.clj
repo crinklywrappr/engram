@@ -259,6 +259,17 @@
           (is (<= (:recent row) 2.0))))
       (finally (d/close conn)))))
 
+(deftest stats-injective-across-user-space
+  (let [conn (fresh-conn)]
+    (try
+      (stats/record-fetch! conn "alice one" 14 [["domain" "clojure"]])
+      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (testing "user ids that differ by a space keep separate rows via the composite tuple"
+        (is (= 1 (:lifetime (first (stats/stats conn "alice one" 14)))))
+        (is (= 2 (:lifetime (first (stats/stats conn "alice" 14))))))
+      (finally (d/close conn)))))
+
 ;; ---------- handler: auth, 409, streaming ----------
 
 (defn- request
@@ -351,6 +362,18 @@
                                        :body {:content "x"}})))))
       (testing "a non-uuid id on DELETE is a coercion failure, returning 400"
         (is (== 400 (:status (request app :delete "/memories/not-a-uuid"
+                                      {:user "alice" :accept "application/json"})))))
+      (finally (d/close conn)))))
+
+(deftest handler-malformed-user
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg)]
+    (try
+      (testing "a user id that is not a token is rejected with 400"
+        (is (== 400 (:status (request app :get "/config"
+                                      {:user "alice bob" :accept "application/json"})))))
+      (testing "a well-formed user id is accepted"
+        (is (== 200 (:status (request app :get "/config"
                                       {:user "alice" :accept "application/json"})))))
       (finally (d/close conn)))))
 
