@@ -210,30 +210,39 @@
          db user (vec srcs))
     []))
 
-(defn query' [db user seen unseen related xs]
+(defn- query'
+  "Walk the transitive related-by-src closure, emitting one wire memory per
+  entity as a lazy sequence, deduplicated by `seen`. `pending` is a queue of
+  matched rows awaiting emission, each an `[eid srcs]` pair. `frontier` is the
+  set of related srcs still to expand. `lookup+args` is a sequence of
+  `[lookup arg]` pairs, each a deferred lookup that yields more rows when
+  applied. The emitted values are pulled from `db`, an immutable snapshot, so
+  they stay valid only while the connection that produced it is open."
+  [db user seen pending frontier lookup+args]
   (cond
-    (seq unseen)
-    (loop [[[eid related'] & unseen'] unseen]
+    (seq pending)
+    (loop [[[eid srcs] & more] pending]
       (cond
-        (nil? eid) (lazy-seq (query' db user seen [] related xs))
-        (seen eid) (recur unseen')
+        (nil? eid) (lazy-seq (query' db user seen [] frontier lookup+args))
+        (seen eid) (recur more)
         :else (cons (->wire (d/pull db pull-pattern eid))
                     (lazy-seq
-                     (query' db user (conj seen eid) unseen'
-                             (st/union related related') xs)))))
+                     (query' db user (conj seen eid) more
+                             (st/union frontier srcs) lookup+args)))))
 
-    (seq xs)
-    (let [[[f x] & xs'] xs]
-      (recur db user seen (f x) related xs'))
+    (seq lookup+args)
+    (let [[[lookup arg] & more] lookup+args]
+      (recur db user seen (lookup arg) frontier more))
 
-    (seq related)
-    (recur db user seen unseen #{}
-           (conj xs [(partial eids-by-srcs db user)
-                     (disj related :none)]))))
+    (seq frontier)
+    (recur db user seen pending #{}
+           (conj lookup+args [(partial eids-by-srcs db user)
+                              (disj frontier :none)]))))
 
 (defn query
   "Return a lazy seq of wire memories: the pair matches for `user` plus the
-  transitive related-by-src closure, deduped. Responses are not truncated."
+  transitive related-by-src closure, deduped. Responses are not truncated. The
+  seq is lazy over an immutable db snapshot, so realize it while `conn` is open."
   [conn user pairs]
   (let [db (d/db conn)
         f (partial eids-by-pair db user)]
