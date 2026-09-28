@@ -313,6 +313,29 @@
     (testing "draining a failing writer does not throw"
       (is (nil? (stats/drain! w))))))
 
+(deftest stat-flush-is-debounced-and-coalesces
+  (let [conn (fresh-conn)
+        w    (stats/writer conn 14 :debounce-ms 80 :max-wait-ms 1000)]
+    (try
+      (dotimes [_ 5] (stats/record! w "alice" [["domain" "clojure"]]))
+      (testing "the flush is deferred, so no write has happened yet"
+        (Thread/sleep 20)
+        (is (empty? (stats/stats conn "alice" 14))))
+      (testing "after the debounce elapses the burst coalesces into the summed count"
+        (Thread/sleep 250)
+        (is (== 5 (:lifetime (first (stats/stats conn "alice" 14))))))
+      (finally (stats/drain! w) (d/close conn)))))
+
+(deftest stat-flush-max-wait-caps-postponement
+  (let [conn (fresh-conn)
+        w    (stats/writer conn 14 :debounce-ms 5000 :max-wait-ms 100)]
+    (try
+      ;; keep rescheduling faster than the debounce; the max wait must still flush
+      (dotimes [_ 8] (stats/record! w "alice" [["domain" "clojure"]]) (Thread/sleep 30))
+      (testing "the maximum wait flushes even though the debounce never elapses"
+        (is (pos? (:lifetime (first (stats/stats conn "alice" 14))))))
+      (finally (stats/drain! w) (d/close conn)))))
+
 (deftest plan-fetch-pure-and-coalesced
   (let [conn (fresh-conn)]
     (try

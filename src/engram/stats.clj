@@ -7,7 +7,9 @@
   config."
   (:require [datalevin.core :as d]
             [taoensso.telemere :as t])
-  (:import [java.util Date]))
+  (:import [java.util Date]
+           [java.util.concurrent Executors ScheduledExecutorService ScheduledFuture
+                                 ThreadFactory TimeUnit]))
 
 (defn- decay-factor
   "The fraction of a decayed weight that remains after `elapsed-ms`, given the
@@ -110,27 +112,71 @@
         (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")
         buffer))))
 
+(defn- fire!
+  "Reset the debounce state and hand the flush to the agent. Runs on the
+  scheduler thread, so it only dispatches. The agent does the write, so the
+  write stays serialized on the one consumer."
+  [{state :state lock :lock ag :agent conn :conn half-life :half-life}]
+  (locking lock (reset! state {:future nil :first-ms nil}))
+  (send-off ag flush-buffer conn half-life))
+
+(defn- reschedule!
+  "Reschedule the one-shot flush. Cancel the prior scheduled flush and schedule a
+  new one a debounce later. Cap the delay so the first pending fetch still
+  flushes within the maximum wait, which stops a sustained burst from starving
+  the flush."
+  [{:keys [scheduler state lock debounce-ms max-wait-ms] :as writer}]
+  (locking lock
+    (let [now      (System/currentTimeMillis)
+          st       @state
+          ^ScheduledFuture future (:future st)
+          first-ms (or (:first-ms st) now)
+          delay    (max 0 (min (long debounce-ms)
+                               (- (+ first-ms (long max-wait-ms)) now)))]
+      (when future (.cancel future false))
+      (let [fut (.schedule ^ScheduledExecutorService scheduler
+                           ^Runnable (fn [] (fire! writer))
+                           (long delay) TimeUnit/MILLISECONDS)]
+        (reset! state {:future fut :first-ms first-ms})))))
+
 (defn writer
-  "Create the stat-write consumer. Its agent holds a pending buffer keyed by
-  [user category label]. The :continue error mode keeps the agent usable after a
-  failed action. Return the map the handler passes to record! and drain!."
-  [conn half-life-days]
-  {:agent     (agent {} :error-mode :continue)
-   :conn      conn
-   :half-life half-life-days})
+  "Create the stat-write consumer with a debounced flush. Its agent holds a
+  pending buffer keyed by [user category label]. Each fetch reschedules a
+  one-shot flush a `debounce-ms` later, capped by `max-wait-ms` so a sustained
+  burst still flushes. The :continue error mode keeps the agent usable after a
+  failed action."
+  [conn half-life-days & {:keys [debounce-ms max-wait-ms]
+                          :or   {debounce-ms 200 max-wait-ms 2000}}]
+  {:agent       (agent {} :error-mode :continue)
+   :conn        conn
+   :half-life   half-life-days
+   :scheduler   (Executors/newSingleThreadScheduledExecutor
+                 (reify ThreadFactory
+                   (newThread [_ r]
+                     (doto (Thread. ^Runnable r "engram-stat-debounce") (.setDaemon true)))))
+   :state       (atom {:future nil :first-ms nil})
+   :lock        (Object.)
+   :debounce-ms debounce-ms
+   :max-wait-ms max-wait-ms})
 
 (defn record!
-  "Fold one fetch into the buffer and trigger a flush. Return at once, so the
-  caller never waits on the write and a write failure never reaches the caller."
-  [{ag :agent conn :conn half-life :half-life} user pairs]
+  "Fold one fetch into the buffer and reschedule the debounced flush. Return at
+  once, so the caller never waits on the write and a write failure never reaches
+  the caller."
+  [{ag :agent :as writer} user pairs]
   (send ag fold user pairs)
-  (send-off ag flush-buffer conn half-life)
+  (reschedule! writer)
   nil)
 
 (defn drain!
-  "Flush any pending counts and wait for the agent to finish. Used on shutdown,
-  so a final flush lands while the connection is open."
-  [{ag :agent conn :conn half-life :half-life}]
+  "Cancel the pending flush, stop the scheduler, flush any pending counts, and
+  wait for the agent. Used on shutdown, so a final flush lands while the
+  connection is open."
+  [{scheduler :scheduler state :state lock :lock ag :agent conn :conn half-life :half-life}]
+  (locking lock
+    (when-let [^ScheduledFuture f (:future @state)] (.cancel f false))
+    (reset! state {:future nil :first-ms nil}))
+  (.shutdown ^ScheduledExecutorService scheduler)
   (send-off ag flush-buffer conn half-life)
   (await ag)
   nil)
