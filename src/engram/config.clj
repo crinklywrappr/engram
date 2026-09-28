@@ -67,3 +67,20 @@
   (when-not (m/validate tag-schema (normalize tags))
     {:code errors/no-configuration
      :message "the category:label set matches no acceptable configuration"}))
+
+;; The two tag rules, and the one place the create-versus-update asymmetry lives.
+;; A create matches even an empty tag set, so an untagged create must satisfy a
+;; configuration. An update matches only when it supplies tags, because an update
+;; that omits tags leaves them unchanged.
+
+(defn create-tag-error
+  "The create tag rule. Match `tags`, or an empty set when tags is nil, against
+  the configurations. Return a 409 error map or nil."
+  [tag-schema tags]
+  (tag-error tag-schema (or tags [])))
+
+(defn update-tag-error
+  "The update tag rule. Match `tags` against the configurations only when tags is
+  non-empty, else skip the check. Return a 409 error map or nil."
+  [tag-schema tags]
+  (when (seq tags) (tag-error tag-schema tags)))

@@ -127,7 +127,8 @@
 
 ;; ---------- memory: batch apply ----------
 
-(def ^:private tag-err-fn #(config/tag-error (:tag-schema cfg) %))
+(def ^:private create-tag-err #(config/create-tag-error (:tag-schema cfg) %))
+(def ^:private update-tag-err #(config/update-tag-error (:tag-schema cfg) %))
 
 (deftest batch-all-pass
   (let [conn (fresh-conn)]
@@ -139,7 +140,7 @@
                  {:create [{:content "c-a" :src "a" :tags [["domain" "clojure"]]}]
                   :update [{:id x :content "new-x"}]
                   :delete [y]}
-                 tag-err-fn)]
+                 create-tag-err update-tag-err)]
         (testing "the batch reports success, one new id, and three memories written"
           (is (true? (:ok? res)))
           (is (== 1 (count (:ids res))))
@@ -160,7 +161,7 @@
                  conn "alice"
                  {:create [{:content "ok" :src "a" :tags [["domain" "clojure"]]}
                            {:content "bad" :src "b" :tags [["tech" "datalevin"]]}]}
-                 tag-err-fn)]
+                 create-tag-err update-tag-err)]
         (testing "the batch is rejected and names only the failing op by its group index"
           (is (false? (:ok? res)))
           (is (= [{:op "create" :i 1}] (map #(select-keys % [:op :i]) (:errors res))))
@@ -177,14 +178,14 @@
                    conn "alice"
                    {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]
                     :delete [(str (java.util.UUID/randomUUID))]}
-                   tag-err-fn)]
+                   create-tag-err update-tag-err)]
           (is (false? (:ok? res)))
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
                  (set (map #(select-keys % [:op :i]) (:errors res)))))
           (is (= #{errors/not-found} (set (map :code (:errors res)))))))
       (let [x (memory/create! conn "alice" {:content "alice only" :src "x" :tags [["domain" "clojure"]]})]
         (testing "another user cannot delete it, and it survives"
-          (let [res (memory/apply-batch! conn "bob" {:delete [x]} tag-err-fn)]
+          (let [res (memory/apply-batch! conn "bob" {:delete [x]} create-tag-err update-tag-err)]
             (is (false? (:ok? res)))
             (is (= errors/not-found (:code (first (:errors res))))))
           (is (== 1 (count (memory/query conn "alice" [["domain" "clojure"]]))))))
@@ -197,7 +198,7 @@
             res (memory/apply-batch!
                  conn "alice"
                  {:update [{:id x :content "c2"} {:id x :related ["y"]}]}
-                 tag-err-fn)]
+                 create-tag-err update-tag-err)]
         (testing "several updates to one id fold cumulatively per field, writing one memory"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
@@ -213,7 +214,7 @@
             res (memory/apply-batch!
                  conn "alice"
                  {:update [{:id x :content "after"}] :delete [x]}
-                 tag-err-fn)]
+                 create-tag-err update-tag-err)]
         (testing "an id in both update and delete flags both ops and writes nothing"
           (is (false? (:ok? res)))
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
@@ -226,7 +227,7 @@
   (let [conn (fresh-conn)]
     (try
       (let [x   (memory/create! conn "alice" {:content "orig" :src "x" :tags [["domain" "clojure"]]})
-            res (memory/apply-batch! conn "alice" {:delete [x x]} tag-err-fn)]
+            res (memory/apply-batch! conn "alice" {:delete [x x]} create-tag-err update-tag-err)]
         (testing "a repeated delete id is deduplicated, deletes once, no error"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
@@ -241,7 +242,7 @@
             plan (memory/plan-batch db "alice"
                                     {:create [{:content "c-a" :src "a" :tags [["domain" "clojure"]]}]
                                      :update [{:id x :content "new-x"}]}
-                                    tag-err-fn)]
+                                    create-tag-err update-tag-err)]
         (testing "the planner returns a plan with ids, tx-data, and an applied count"
           (is (true? (:ok? plan)))
           (is (== 1 (count (:ids plan))))
@@ -257,7 +258,7 @@
     (try
       (let [plan (memory/plan-batch (d/db conn) "alice"
                                     {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]}
-                                    tag-err-fn)]
+                                    create-tag-err update-tag-err)]
         (testing "a failing plan carries only the failing op and no tx-data"
           (is (false? (:ok? plan)))
           (is (= errors/not-found (:code (first (:errors plan)))))
@@ -268,7 +269,7 @@
   (let [conn (fresh-conn)]
     (try
       (doseq [b [{} {:create [] :update [] :delete []}]]
-        (let [res (memory/apply-batch! conn "alice" b tag-err-fn)]
+        (let [res (memory/apply-batch! conn "alice" b create-tag-err update-tag-err)]
           (testing "an empty batch succeeds with no ids and applied 0"
             (is (true? (:ok? res)))
             (is (= [] (:ids res)))

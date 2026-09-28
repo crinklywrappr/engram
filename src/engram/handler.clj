@@ -194,12 +194,18 @@
         (ndjson-response {:header true :pairs pairs} mems)
         {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
 
+(defn- reject-409
+  "Log a rejected write and return the 409 body with the current configurations
+  attached, so the client can refresh its cache."
+  [user cfg err]
+  (t/log! {:level :warn :id ::rejected :data {:user user :error (:code err)}} "rejected")
+  {:status 409 :body (errors/->wire (assoc err :configurations (:configurations cfg)))})
+
 (defn- create-handler [conn cfg req]
   (let [user (:engram/user req)
         {:keys [content src tags related]} (get-in req [:parameters :body])]
-    (if-let [err (config/tag-error (:tag-schema cfg) (or tags []))]
-      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:code err)}} "rejected")
-          {:status 409 :body (errors/->wire (assoc err :configurations (:configurations cfg)))})
+    (if-let [err (config/create-tag-error (:tag-schema cfg) tags)]
+      (reject-409 user cfg err)
       {:status 201
        :body {:id (memory/create! conn user {:content content :src src :tags tags
                                              :related related})}})))
@@ -208,9 +214,8 @@
   (let [user (:engram/user req)
         id   (get-in req [:parameters :path :id])
         {:keys [content tags related]} (get-in req [:parameters :body])]
-    (if-let [err (and (seq tags) (config/tag-error (:tag-schema cfg) tags))]
-      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:code err)}} "rejected")
-          {:status 409 :body (errors/->wire (assoc err :configurations (:configurations cfg)))})
+    (if-let [err (config/update-tag-error (:tag-schema cfg) tags)]
+      (reject-409 user cfg err)
       (if (memory/update! conn user id {:content content :tags tags :related related})
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
@@ -225,7 +230,9 @@
 (defn- batch-handler [conn cfg req]
   (let [user   (:engram/user req)
         batch  (get-in req [:parameters :body])
-        result (memory/apply-batch! conn user batch #(config/tag-error (:tag-schema cfg) %))]
+        result (memory/apply-batch! conn user batch
+                                    #(config/create-tag-error (:tag-schema cfg) %)
+                                    #(config/update-tag-error (:tag-schema cfg) %))]
     (if (:ok? result)
       {:status 200 :body {:ids (:ids result) :applied (:applied result)}}
       (let [entries (mapv (fn [e]

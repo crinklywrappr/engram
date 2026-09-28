@@ -120,24 +120,25 @@
 (defn plan-batch
   "Plan a grouped batch for `user` against the database value `db`. Pure: it
   reads `db` and writes nothing. `batch` is a map with optional :create, :update,
-  and :delete lists. `tag-error` maps a tag vector to an error map or nil.
+  and :delete lists. `create-tag-error` and `update-tag-error` each map a tag
+  vector to an error map or nil, carrying the create and the update tag rule.
 
-  Pre-validate against `db`: a create or an update with tags is checked against
-  the configurations, an update or delete is resolved to one of the user's own
-  memories, and an id must not appear in both the update and the delete group.
-  Within a group, several updates to one id fold cumulatively (a later entry wins
-  a same-field tie) and a repeated delete id is deduplicated. If all pass, return
+  Pre-validate against `db`: a create or an update is checked against its tag
+  rule, an update or delete is resolved to one of the user's own memories, and an
+  id must not appear in both the update and the delete group. Within a group,
+  several updates to one id fold cumulatively (a later entry wins a same-field
+  tie) and a repeated delete id is deduplicated. If all pass, return
   {:ok? true :ids [create-ids...] :tx-data [...] :applied n}; else return
   {:ok? false :errors [{:op :i :code ...} ...]} for the failing ops only. The
   index :i is 0-based within the op's own group list."
-  [db user batch tag-error]
+  [db user batch create-tag-error update-tag-error]
   (let [creates (vec (:create batch))
         updates (vec (:update batch))
         deletes (vec (:delete batch))
         conflicts (st/intersection (set (map :id updates)) (set deletes))
         create-errs
         (keep-indexed
-         (fn [i p] (when-let [e (tag-error (or (:tags p) []))]
+         (fn [i p] (when-let [e (create-tag-error (:tags p))]
                      (merge {:op "create" :i i} e)))
          creates)
         update-results
@@ -147,7 +148,7 @@
              (cond
                (conflicts id) {:error {:op "update" :i i :code errors/conflict :message conflict-msg}}
                :else (if-let [eid (eid-of db user id)]
-                       (if-let [e (when (seq (:tags p)) (tag-error (:tags p)))]
+                       (if-let [e (update-tag-error (:tags p))]
                          {:error (merge {:op "update" :i i} e)}
                          {:eid eid :payload p})
                        {:error {:op "update" :i i :code errors/not-found :message not-found-msg}}))))
@@ -184,8 +185,8 @@
   validation and tx-data planning to `plan-batch` over the current db value, then
   transact once on success. Return {:ok? true :ids [...] :applied n} on success,
   or {:ok? false :errors [...]} on failure, writing nothing on failure."
-  [conn user batch tag-error]
-  (let [result (plan-batch (d/db conn) user batch tag-error)]
+  [conn user batch create-tag-error update-tag-error]
+  (let [result (plan-batch (d/db conn) user batch create-tag-error update-tag-error)]
     (if (:ok? result)
       (do (when (seq (:tx-data result)) (d/transact! conn (:tx-data result)))
           {:ok? true :ids (:ids result) :applied (:applied result)})
