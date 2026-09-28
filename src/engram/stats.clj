@@ -25,24 +25,33 @@
                 [?s :stat/last-request ?last]]
        db user category label))
 
+(defn plan-fetch
+  "Pure. Build the batched stat transaction for `user` over `pair-counts`, a map
+  of [category label] to a coalesced count. For each pair, read the current row
+  from `db`, decay the stored weight to `flush-ms`, and add the count to the
+  lifetime and to the decayed weight. Return a vector of tx-maps, empty when
+  `pair-counts` is empty. Take no connection and perform no write."
+  [db user half-life-days pair-counts flush-ms]
+  (mapv (fn [[[c l] n]]
+          (let [[life dec ^Date last] (existing db user c l)
+                base (if last
+                       (* (double dec)
+                          (decay-factor half-life-days (- flush-ms (.getTime last))))
+                       0.0)]
+            {:stat/user user :stat/category c :stat/label l
+             :stat/lifetime (+ (long (or life 0)) (long n))
+             :stat/decayed  (+ base (double n))
+             :stat/last-request (Date. flush-ms)}))
+        pair-counts))
+
 (defn record-fetch!
-  "Record that `user` fetched each pair: increment lifetime and update the decay
-  weight (decay the old weight to now, then add one)."
+  "Record that `user` fetched each pair once: read, decay to now, and add one.
+  Delegate the tx-data to `plan-fetch` with a count of one per pair, then write."
   [conn user half-life-days pairs]
-  (let [db     (d/db conn)
-        now    (Date.)
-        now-ms (.getTime now)
-        tx (for [[c l] pairs]
-             (let [[life dec ^Date last] (existing db user c l)
-                   decayed (if last
-                             (+ 1.0 (* (double dec)
-                                       (decay-factor half-life-days (- now-ms (.getTime last)))))
-                             1.0)]
-               {:stat/user user :stat/category c :stat/label l
-                :stat/lifetime (inc (long (or life 0)))
-                :stat/decayed decayed
-                :stat/last-request now}))]
-    (when (seq tx) (d/transact! conn (vec tx)))))
+  (let [tx (plan-fetch (d/db conn) user half-life-days
+                       (into {} (map (fn [p] [p 1])) pairs)
+                       (System/currentTimeMillis))]
+    (when (seq tx) (d/transact! conn tx))))
 
 (defn stats
   "Return the caller's stat rows: lifetime and the recent decay count projected

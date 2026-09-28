@@ -291,6 +291,26 @@
           (is (<= (:recent row) 2.0))))
       (finally (d/close conn)))))
 
+(deftest plan-fetch-pure-and-coalesced
+  (let [conn (fresh-conn)]
+    (try
+      (stats/record-fetch! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
+      (let [db (d/db conn)]
+        (testing "a coalesced count adds to the prior lifetime and decayed weight"
+          (let [tx (stats/plan-fetch db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
+            (is (== 1 (count tx)))
+            (is (== 4 (:stat/lifetime (first tx))))
+            (is (< 3.0 (:stat/decayed (first tx)) 4.001))))
+        (testing "a pair with no prior row starts at the count"
+          (let [tx (stats/plan-fetch db "bob" 14 {["domain" "clojure"] 2} (System/currentTimeMillis))]
+            (is (== 2 (:stat/lifetime (first tx))))
+            (is (== 2.0 (:stat/decayed (first tx))))))
+        (testing "an empty pair-counts plans nothing"
+          (is (= [] (stats/plan-fetch db "alice" 14 {} (System/currentTimeMillis)))))
+        (testing "the planner writes nothing: the stored lifetime is still one"
+          (is (== 1 (:lifetime (first (stats/stats conn "alice" 14)))))))
+      (finally (d/close conn)))))
+
 (deftest stats-injective-across-user-space
   (let [conn (fresh-conn)]
     (try
