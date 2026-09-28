@@ -41,7 +41,7 @@ _Avoid_: links, references
 **Configuration**:
 One acceptable set of category-to-cardinality rules. A memory that satisfies any
 one configuration is valid.
-_Avoid_: schema, config, ruleset
+_Avoid_: schema, ruleset
 
 **Cardinality**:
 How many labels of a category a memory can carry: `1`, `?`, `*`, or `+`.
@@ -52,12 +52,22 @@ The owner of a set of memories, identified by an SSH key. The key comment is the
 user id. Memories are private to their user.
 _Avoid_: account, tenant, client
 
+**Recall**:
+The act of asking for memories by their category:label pairs. A recall returns
+the matching memories and the memories they link to across hops.
+_Avoid_: query, request
+
+**Recall count**:
+How often a category:label pair was recalled. engram keeps it as a lifetime
+total and a recent decay measure.
+_Avoid_: hits, fetch count
+
 **Lifetime count**:
-The running total of how often a category:label pair was fetched.
+The running total of how often a category:label pair was recalled.
 _Avoid_: total, hits
 
 **Recent count**:
-The exponential-decay measure of how often a category:label pair was fetched
+The exponential-decay measure of how often a category:label pair was recalled
 lately, kept beside the lifetime count.
 _Avoid_: score, frequency, weight
 
