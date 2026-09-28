@@ -291,6 +291,28 @@
           (is (<= (:recent row) 2.0))))
       (finally (d/close conn)))))
 
+(deftest stat-writer-serializes-and-drains
+  (let [conn (fresh-conn)
+        w    (stats/writer conn 14)]
+    (try
+      ;; 10 threads each record the same pair 5 times, concurrently
+      (let [fs (doall (repeatedly 10 #(future (dotimes [_ 5]
+                                                (stats/record! w "alice" [["domain" "clojure"]])))))]
+        (run! deref fs))
+      (stats/drain! w)
+      (testing "every concurrent increment lands, none lost to a race"
+        (is (== 50 (:lifetime (first (stats/stats conn "alice" 14))))))
+      (finally (d/close conn)))))
+
+(deftest stat-write-failure-is-isolated
+  (let [conn (fresh-conn)
+        w    (stats/writer conn 14)]
+    (d/close conn)                                   ; every flush now fails
+    (testing "recording never throws to the caller when the write fails"
+      (is (nil? (stats/record! w "alice" [["domain" "clojure"]]))))
+    (testing "draining a failing writer does not throw"
+      (is (nil? (stats/drain! w))))))
+
 (deftest plan-fetch-pure-and-coalesced
   (let [conn (fresh-conn)]
     (try
@@ -338,7 +360,7 @@
 
 (deftest handler-flow
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "a request without the user header is rejected"
         (is (= 401 (:status (request app :post "/memories"
@@ -373,7 +395,7 @@
 
 (deftest handler-delete
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (let [resp (request app :post "/memories"
                           {:user "alice" :accept "application/json"
@@ -389,7 +411,7 @@
 
 (deftest handler-token-format
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "a malformed src returns 400 (coercion)"
         (is (== 400 (:status (request app :post "/memories"
@@ -406,7 +428,7 @@
 
 (deftest handler-malformed-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "a non-uuid id on PUT is a coercion failure, returning 400"
         (is (== 400 (:status (request app :put "/memories/not-a-uuid"
@@ -419,7 +441,7 @@
 
 (deftest handler-malformed-user
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "a user id that is not a token is rejected with 400"
         (is (== 400 (:status (request app :get "/config"
@@ -431,7 +453,7 @@
 
 (deftest handler-batch
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "a grouped-map batch of creates returns 200 with ids and an applied count"
         (let [resp (request app :post "/memories/batch"
@@ -484,7 +506,7 @@
 
 (deftest query-json-fallback-shape
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (request app :post "/memories"
                {:user "alice" :accept "application/json"
@@ -504,7 +526,7 @@
 
 (deftest error-logging-and-correlation-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg)]
+        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
     (try
       (testing "every response carries a correlation-id header"
         (is (some? (get-in (request app :get "/healthz" {:accept "application/json"})

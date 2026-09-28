@@ -5,7 +5,8 @@
   an exponential-decay recent count. The recent count is updated on each fetch
   and projected to the current time on read, using the half-life from the admin
   config."
-  (:require [datalevin.core :as d])
+  (:require [datalevin.core :as d]
+            [taoensso.telemere :as t])
   (:import [java.util Date]))
 
 (defn- decay-factor
@@ -72,3 +73,64 @@
                 {:category c :label l :lifetime life
                  :recent (* (double dec)
                             (decay-factor half-life-days (- now-ms (.getTime last))))})))))
+
+;; ---------- the stat-write consumer ----------
+;;
+;; A single agent serializes every stat write, so no two read-modify-writes
+;; interleave and no increment is lost. Its value is a pending buffer keyed by
+;; [user category label]. A request thread folds a fetch in and returns at once.
+;; A flush drains the buffer to one transaction through plan-fetch. The decay
+;; uses a clock captured at flush time, a bounded drift held as a known limit.
+
+(defn- fold
+  "Fold one fetch into the pending buffer, adding one to each pair's count."
+  [buffer user pairs]
+  (reduce (fn [b [c l]] (update b [user c l] (fnil inc 0))) buffer pairs))
+
+(defn- by-user
+  "Regroup a buffer keyed by [user category label] into a map of user to a map of
+  [category label] to count."
+  [buffer]
+  (reduce (fn [m [[user c l] n]] (assoc-in m [user [c l]] n)) {} buffer))
+
+(defn- flush-buffer
+  "Agent action. Drain the pending buffer to one transaction and reset it. On a
+  write failure, keep the buffer so the next flush retries the counts."
+  [buffer conn half-life-days]
+  (if (empty? buffer)
+    buffer
+    (try
+      (let [db       (d/db conn)
+            flush-ms (System/currentTimeMillis)
+            tx       (mapcat (fn [[user pcs]] (plan-fetch db user half-life-days pcs flush-ms))
+                             (by-user buffer))]
+        (when (seq tx) (d/transact! conn (vec tx)))
+        {})
+      (catch Throwable e
+        (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")
+        buffer))))
+
+(defn writer
+  "Create the stat-write consumer. Its agent holds a pending buffer keyed by
+  [user category label]. The :continue error mode keeps the agent usable after a
+  failed action. Return the map the handler passes to record! and drain!."
+  [conn half-life-days]
+  {:agent     (agent {} :error-mode :continue)
+   :conn      conn
+   :half-life half-life-days})
+
+(defn record!
+  "Fold one fetch into the buffer and trigger a flush. Return at once, so the
+  caller never waits on the write and a write failure never reaches the caller."
+  [{ag :agent conn :conn half-life :half-life} user pairs]
+  (send ag fold user pairs)
+  (send-off ag flush-buffer conn half-life)
+  nil)
+
+(defn drain!
+  "Flush any pending counts and wait for the agent to finish. Used on shutdown,
+  so a final flush lands while the connection is open."
+  [{ag :agent conn :conn half-life :half-life}]
+  (send-off ag flush-buffer conn half-life)
+  (await ag)
+  nil)

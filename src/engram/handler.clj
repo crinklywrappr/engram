@@ -185,10 +185,10 @@
 
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
-(defn- query-handler [conn cfg req]
+(defn- query-handler [conn writer req]
   (let [user  (:engram/user req)
         pairs (get-in req [:parameters :body :pairs])]
-    (stats/record-fetch! conn user (:half-life-days cfg) pairs)
+    (stats/record! writer user pairs)
     (let [mems (memory/query conn user pairs)]
       (if (wants-ndjson? req)
         (ndjson-response {:header true :pairs pairs} mems)
@@ -246,8 +246,9 @@
         {:status 422 :body {:errors entries}}))))
 
 (defn- routes
-  "The reitit route table, closing over the db conn and the loaded config."
-  [conn cfg]
+  "The reitit route table, closing over the db conn, the loaded config, and the
+  stat-write consumer."
+  [conn cfg writer]
   [["/swagger.json"
     {:get {:no-doc true
            :swagger {:info {:title "engram" :version "0.1.0"
@@ -272,7 +273,7 @@
                                :handler (fn [req] (batch-handler conn cfg req))}}]
     ;; No :responses: the NDJSON stream cannot be response-coerced (see QueryOut).
     ["/memories/query" {:post {:parameters {:body QueryBody}
-                               :handler (fn [req] (query-handler conn cfg req))}}]
+                               :handler (fn [req] (query-handler conn writer req))}}]
     ["/memories/:id"   {:put    {:parameters {:path [:map [:id IdStr]] :body UpdateBody}
                                  :responses  {200 {:body IdOut} 404 {:body ErrorOut} 409 {:body Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
@@ -281,11 +282,12 @@
                                  :handler (fn [req] (delete-handler conn req))}}]]])
 
 (defn app
-  "Build the ring handler over the (opaque) db conn and the loaded config."
-  [conn cfg]
+  "Build the ring handler over the (opaque) db conn, the loaded config, and the
+  stat-write consumer."
+  [conn cfg writer]
   (-> (ring/ring-handler
        (ring/router
-        (routes conn cfg)
+        (routes conn cfg writer)
         {:conflicts nil
          :data {:coercion   rcm/coercion
                 :muuntaja   mc/instance
