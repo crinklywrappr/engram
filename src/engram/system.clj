@@ -8,7 +8,7 @@
             [engram.config :as config]
             [engram.handler :as handler]
             [engram.migrations :as migrations]
-            [engram.stats :as stats]
+            [engram.stats.writer :as stat-writer]
             [integrant.core :as ig]
             [org.httpkit.server :as hk]
             [syncopate.core :as sc]))
@@ -35,11 +35,11 @@
     (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defmethod ig/init-key :engram.stats/writer [_ {:keys [conn config]}]
-  (stats/writer conn (:half-life-days config)))
+  (stat-writer/writer conn (:half-life-days config)))
 
 (defmethod ig/halt-key! :engram.stats/writer [_ writer]
   ;; drain the pending buffer while the connection is still open
-  (stats/drain! writer))
+  (stat-writer/drain! writer))
 
 (defmethod ig/init-key :engram.web/handler [_ {:keys [db config writer]}]
   (handler/app db config writer))

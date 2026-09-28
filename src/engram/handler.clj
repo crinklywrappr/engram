@@ -11,6 +11,7 @@
             [engram.errors :as errors]
             [engram.memory :as memory]
             [engram.stats :as stats]
+            [engram.stats.writer :as stat-writer]
             [jsonista.core :as json]
             [muuntaja.core :as mc]
             [reitit.coercion.malli :as rcm]
@@ -188,7 +189,7 @@
 (defn- query-handler [conn writer req]
   (let [user  (:engram/user req)
         pairs (get-in req [:parameters :body :pairs])]
-    (stats/record! writer user pairs)
+    (stat-writer/record! writer user pairs)
     (let [mems (memory/query conn user pairs)]
       (if (wants-ndjson? req)
         (ndjson-response {:header true :pairs pairs} mems)

@@ -9,6 +9,7 @@
             [engram.memory :as memory]
             [engram.migrations :as migrations]
             [engram.stats :as stats]
+            [engram.stats.writer :as stat-writer]
             [jsonista.core :as json]
             [malli.core :as m]
             [syncopate.core :as sc])
@@ -301,48 +302,48 @@
 
 (deftest stat-writer-serializes-and-drains
   (let [conn (fresh-conn)
-        w    (stats/writer conn 14)]
+        w    (stat-writer/writer conn 14)]
     (try
       ;; 10 threads each record the same pair 5 times, concurrently
       (let [fs (doall (repeatedly 10 #(future (dotimes [_ 5]
-                                                (stats/record! w "alice" [["domain" "clojure"]])))))]
+                                                (stat-writer/record! w"alice" [["domain" "clojure"]])))))]
         (run! deref fs))
-      (stats/drain! w)
+      (stat-writer/drain! w)
       (testing "every concurrent increment lands, none lost to a race"
         (is (== 50 (:lifetime (first (stats/stats conn "alice" 14))))))
       (finally (d/close conn)))))
 
 (deftest stat-write-failure-is-isolated
   (let [conn (fresh-conn)
-        w    (stats/writer conn 14)]
+        w    (stat-writer/writer conn 14)]
     (d/close conn)                                   ; every flush now fails
     (testing "recording never throws to the caller when the write fails"
-      (is (nil? (stats/record! w "alice" [["domain" "clojure"]]))))
+      (is (nil? (stat-writer/record! w"alice" [["domain" "clojure"]]))))
     (testing "draining a failing writer does not throw"
-      (is (nil? (stats/drain! w))))))
+      (is (nil? (stat-writer/drain! w))))))
 
 (deftest stat-flush-is-debounced-and-coalesces
   (let [conn (fresh-conn)
-        w    (stats/writer conn 14 :debounce-ms 80 :max-wait-ms 1000)]
+        w    (stat-writer/writer conn 14 :debounce-ms 80 :max-wait-ms 1000)]
     (try
-      (dotimes [_ 5] (stats/record! w "alice" [["domain" "clojure"]]))
+      (dotimes [_ 5] (stat-writer/record! w"alice" [["domain" "clojure"]]))
       (testing "the flush is deferred, so no write has happened yet"
         (Thread/sleep 20)
         (is (empty? (stats/stats conn "alice" 14))))
       (testing "after the debounce elapses the burst coalesces into the summed count"
         (Thread/sleep 250)
         (is (== 5 (:lifetime (first (stats/stats conn "alice" 14))))))
-      (finally (stats/drain! w) (d/close conn)))))
+      (finally (stat-writer/drain! w) (d/close conn)))))
 
 (deftest stat-flush-max-wait-caps-postponement
   (let [conn (fresh-conn)
-        w    (stats/writer conn 14 :debounce-ms 5000 :max-wait-ms 100)]
+        w    (stat-writer/writer conn 14 :debounce-ms 5000 :max-wait-ms 100)]
     (try
       ;; keep rescheduling faster than the debounce; the max wait must still flush
-      (dotimes [_ 8] (stats/record! w "alice" [["domain" "clojure"]]) (Thread/sleep 30))
+      (dotimes [_ 8] (stat-writer/record! w"alice" [["domain" "clojure"]]) (Thread/sleep 30))
       (testing "the maximum wait flushes even though the debounce never elapses"
         (is (pos? (:lifetime (first (stats/stats conn "alice" 14))))))
-      (finally (stats/drain! w) (d/close conn)))))
+      (finally (stat-writer/drain! w) (d/close conn)))))
 
 (deftest plan-fetch-pure-and-coalesced
   (let [conn (fresh-conn)]
@@ -391,7 +392,7 @@
 
 (deftest handler-flow
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "a request without the user header is rejected"
         (is (= 401 (:status (request app :post "/memories"
@@ -426,7 +427,7 @@
 
 (deftest handler-delete
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (let [resp (request app :post "/memories"
                           {:user "alice" :accept "application/json"
@@ -442,7 +443,7 @@
 
 (deftest handler-token-format
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "a malformed src returns 400 (coercion)"
         (is (== 400 (:status (request app :post "/memories"
@@ -459,7 +460,7 @@
 
 (deftest handler-malformed-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "a non-uuid id on PUT is a coercion failure, returning 400"
         (is (== 400 (:status (request app :put "/memories/not-a-uuid"
@@ -472,7 +473,7 @@
 
 (deftest handler-malformed-user
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "a user id that is not a token is rejected with 400"
         (is (== 400 (:status (request app :get "/config"
@@ -484,7 +485,7 @@
 
 (deftest handler-batch
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "a grouped-map batch of creates returns 200 with ids and an applied count"
         (let [resp (request app :post "/memories/batch"
@@ -537,7 +538,7 @@
 
 (deftest query-json-fallback-shape
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (request app :post "/memories"
                {:user "alice" :accept "application/json"
@@ -557,7 +558,7 @@
 
 (deftest error-logging-and-correlation-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stats/writer conn (:half-life-days cfg)))]
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
       (testing "every response carries a correlation-id header"
         (is (some? (get-in (request app :get "/healthz" {:accept "application/json"})
