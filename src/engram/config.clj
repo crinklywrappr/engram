@@ -10,6 +10,7 @@
   are closed to the configurations. Labels, `src`, and `related` are lowercase
   kebab-case tokens (`Token`), checked at the route boundary by request coercion."
   (:require [clojure.edn :as edn]
+            [engram.errors :as errors]
             [malli.core :as m]))
 
 ;; A token is lowercase kebab-case that also reads as a Clojure keyword literal:
@@ -57,5 +58,5 @@
   caller adds the configurations to the body so the client can refresh."
   [tag-schema tags]
   (when-not (m/validate tag-schema (normalize tags))
-    {:error "no-configuration"
+    {:code errors/no-configuration
      :message "the category:label set matches no acceptable configuration"}))

@@ -8,6 +8,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [engram.config :as config]
+            [engram.errors :as errors]
             [engram.memory :as memory]
             [engram.stats :as stats]
             [jsonista.core :as json]
@@ -193,8 +194,8 @@
   (let [user (:engram/user req)
         {:keys [content src tags related]} (get-in req [:parameters :body])]
     (if-let [err (config/tag-error (:tag-schema cfg) (or tags []))]
-      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:error err)}} "rejected")
-          {:status 409 :body (assoc err :configurations (:configurations cfg))})
+      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:code err)}} "rejected")
+          {:status 409 :body (errors/->wire (assoc err :configurations (:configurations cfg)))})
       {:status 201
        :body {:id (memory/create! conn user {:content content :src src :tags tags
                                              :related related})}})))
@@ -204,8 +205,8 @@
         id   (get-in req [:parameters :path :id])
         {:keys [content tags related]} (get-in req [:parameters :body])]
     (if-let [err (and (seq tags) (config/tag-error (:tag-schema cfg) tags))]
-      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:error err)}} "rejected")
-          {:status 409 :body (assoc err :configurations (:configurations cfg))})
+      (do (t/log! {:level :warn :id ::rejected :data {:user user :error (:code err)}} "rejected")
+          {:status 409 :body (errors/->wire (assoc err :configurations (:configurations cfg)))})
       (if (memory/update! conn user id {:content content :tags tags :related related})
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
@@ -223,14 +224,15 @@
         result (memory/apply-batch! conn user batch #(config/tag-error (:tag-schema cfg) %))]
     (if (:ok? result)
       {:status 200 :body {:ids (:ids result) :applied (:applied result)}}
-      (let [errors (mapv (fn [e]
-                           (cond-> e
-                             (= "no-configuration" (:error e))
-                             (assoc :configurations (:configurations cfg))))
-                         (:errors result))]
+      (let [entries (mapv (fn [e]
+                            (-> (cond-> e
+                                  (= errors/no-configuration (:code e))
+                                  (assoc :configurations (:configurations cfg)))
+                                errors/->wire))
+                          (:errors result))]
         (t/log! {:level :warn :id ::batch-rejected
-                 :data {:user user :failed (count errors)}} "batch rejected")
-        {:status 422 :body {:errors errors}}))))
+                 :data {:user user :failed (count entries)}} "batch rejected")
+        {:status 422 :body {:errors entries}}))))
 
 (defn- routes
   "The reitit route table, closing over the db conn and the loaded config."

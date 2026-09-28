@@ -4,6 +4,7 @@
             [clojure.test :refer [deftest is testing]]
             [datalevin.core :as d]
             [engram.config :as config]
+            [engram.errors :as errors]
             [engram.handler :as handler]
             [engram.memory :as memory]
             [engram.migrations :as migrations]
@@ -33,9 +34,9 @@
     (testing "a valid domain fact passes"
       (is (nil? (config/tag-error s [["domain" "clojure"]]))))
     (testing "a required category (domain +) missing fails"
-      (is (= "no-configuration" (:error (config/tag-error s [["tech" "datalevin"]])))))
+      (is (= errors/no-configuration (:code (config/tag-error s [["tech" "datalevin"]])))))
     (testing "an unknown category fails (categories are closed)"
-      (is (= "no-configuration" (:error (config/tag-error s [["framework" "reitit"]])))))))
+      (is (= errors/no-configuration (:code (config/tag-error s [["framework" "reitit"]])))))))
 
 (deftest token-rule
   (testing "valid tokens are accepted"
@@ -163,7 +164,7 @@
         (testing "the batch is rejected and names only the failing op by its group index"
           (is (false? (:ok? res)))
           (is (= [{:op "create" :i 1}] (map #(select-keys % [:op :i]) (:errors res))))
-          (is (= "no-configuration" (:error (first (:errors res))))))
+          (is (= errors/no-configuration (:code (first (:errors res))))))
         (testing "nothing was written, not even the valid create"
           (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
@@ -180,12 +181,12 @@
           (is (false? (:ok? res)))
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
                  (set (map #(select-keys % [:op :i]) (:errors res)))))
-          (is (= #{"not-found"} (set (map :error (:errors res)))))))
+          (is (= #{errors/not-found} (set (map :code (:errors res)))))))
       (let [x (memory/create! conn "alice" {:content "alice only" :src "x" :tags [["domain" "clojure"]]})]
         (testing "another user cannot delete it, and it survives"
           (let [res (memory/apply-batch! conn "bob" {:delete [x]} tag-err-fn)]
             (is (false? (:ok? res)))
-            (is (= "not-found" (:error (first (:errors res))))))
+            (is (= errors/not-found (:code (first (:errors res))))))
           (is (== 1 (count (memory/query conn "alice" [["domain" "clojure"]]))))))
       (finally (d/close conn)))))
 
@@ -217,7 +218,7 @@
           (is (false? (:ok? res)))
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
                  (set (map #(select-keys % [:op :i]) (:errors res)))))
-          (is (= #{"conflict"} (set (map :error (:errors res)))))
+          (is (= #{errors/conflict} (set (map :code (:errors res)))))
           (is (= "orig" (:content (first (memory/query conn "alice" [["domain" "clojure"]])))))))
       (finally (d/close conn)))))
 
@@ -288,9 +289,11 @@
       (testing "an invalid create returns 409 with the configurations"
         (let [resp (request app :post "/memories"
                             {:user "alice" :accept "application/json"
-                             :body {:content "bad" :src "s2" :tags [["tech" "datalevin"]]}})]
+                             :body {:content "bad" :src "s2" :tags [["tech" "datalevin"]]}})
+              body (body-json resp)]
           (is (= 409 (:status resp)))
-          (is (some? (:configurations (body-json resp))))))
+          (is (= "no-configuration" (:error body)))
+          (is (some? (:configurations body)))))
       (testing "GET /config returns the configurations"
         (is (= 200 (:status (request app :get "/config" {:user "alice" :accept "application/json"})))))
       (testing "the fetch call streams NDJSON when asked"
@@ -372,7 +375,25 @@
           (is (== 422 (:status resp)))
           (is (= "create" (:op (first (:errors body)))))
           (is (== 0 (:i (first (:errors body)))))
+          (is (= "no-configuration" (:error (first (:errors body)))))
           (is (some? (:configurations (first (:errors body)))))))
+      (testing "an id in both update and delete rejects with 422 and conflict on the wire"
+        (let [id   (:id (body-json (request app :post "/memories"
+                                            {:user "alice" :accept "application/json"
+                                             :body {:content "orig" :src "z" :tags [["domain" "clojure"]]}})))
+              resp (request app :post "/memories/batch"
+                            {:user "alice" :accept "application/json"
+                             :body {:update [{:id id :content "after"}] :delete [id]}})
+              body (body-json resp)]
+          (is (== 422 (:status resp)))
+          (is (= #{"conflict"} (set (map :error (:errors body)))))))
+      (testing "an update of a missing id rejects with 422 and not-found on the wire"
+        (let [resp (request app :post "/memories/batch"
+                            {:user "alice" :accept "application/json"
+                             :body {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]}})
+              body (body-json resp)]
+          (is (== 422 (:status resp)))
+          (is (= "not-found" (:error (first (:errors body)))))))
       (testing "an empty batch returns 200 with no ids"
         (let [resp (request app :post "/memories/batch"
                             {:user "alice" :accept "application/json" :body {}})

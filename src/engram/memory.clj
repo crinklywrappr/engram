@@ -7,7 +7,8 @@
   category:label pairs, then walks the related-by-src graph transitively to pull
   in linked memories the pairs did not name."
   (:require [datalevin.core :as d]
-            [clojure.set :as st])
+            [clojure.set :as st]
+            [engram.errors :as errors])
   (:import [java.util UUID Date]))
 
 (def ^:private pull-pattern
@@ -146,21 +147,21 @@
          (fn [i p]
            (let [id (:id p)]
              (cond
-               (conflicts id) {:error {:op "update" :i i :error "conflict" :message conflict-msg}}
+               (conflicts id) {:error {:op "update" :i i :code errors/conflict :message conflict-msg}}
                :else (if-let [eid (eid-of db user id)]
                        (if-let [e (when (seq (:tags p)) (tag-error (:tags p)))]
                          {:error (merge {:op "update" :i i} e)}
                          {:eid eid :payload p})
-                       {:error {:op "update" :i i :error "not-found" :message not-found-msg}}))))
+                       {:error {:op "update" :i i :code errors/not-found :message not-found-msg}}))))
          updates)
         delete-results
         (map-indexed
          (fn [i id]
            (cond
-             (conflicts id) {:error {:op "delete" :i i :error "conflict" :message conflict-msg}}
+             (conflicts id) {:error {:op "delete" :i i :code errors/conflict :message conflict-msg}}
              :else (if-let [eid (eid-of db user id)]
                      {:eid eid}
-                     {:error {:op "delete" :i i :error "not-found" :message not-found-msg}})))
+                     {:error {:op "delete" :i i :code errors/not-found :message not-found-msg}})))
          deletes)
         errors (vec (concat create-errs
                             (keep :error update-results)
