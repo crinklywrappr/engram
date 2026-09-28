@@ -8,8 +8,8 @@
   (:require [datalevin.core :as d]
             [taoensso.telemere :as t])
   (:import [java.util Date]
-           [java.util.concurrent Executors ScheduledExecutorService ScheduledFuture
-                                 ThreadFactory TimeUnit]))
+           [java.util.concurrent Executors ExecutorService RejectedExecutionException
+                                 ScheduledExecutorService ScheduledFuture ThreadFactory TimeUnit]))
 
 (defn- decay-factor
   "The fraction of a decayed weight that remains after `elapsed-ms`, given the
@@ -40,10 +40,15 @@
 
 ;; ---------- the stat-write consumer ----------
 ;;
-;; A single agent serializes every stat write, so no two read-modify-writes
-;; interleave and no increment is lost. Its value is a pending buffer keyed by
-;; [user category label]. A request thread folds a fetch in and returns at once.
-;; A flush drains the buffer to one transaction through plan-fetch, the pure
+;; One agent is the only serialization point, and it dispatches every action
+;; through a single-thread daemon executor the writer owns (send-via, not send
+;; or send-off). Its value holds the pending buffer keyed by [user category
+;; label], the scheduled flush, and the window start. Because every action runs
+;; on the agent, one at a time, no two read-modify-writes interleave and no
+;; increment is lost, and the debounce state needs no lock. engram never touches
+;; the shared agent pools, so its threads are daemon and the JVM exits without
+;; shutdown-agents. A request thread hands a fetch in and returns at once. A
+;; flush drains the buffer to one transaction through plan-fetch, the pure
 ;; planner just below. The decay uses a clock captured at flush time, a bounded
 ;; drift held as a known limit.
 
@@ -77,99 +82,98 @@
              :stat/last-request (Date. flush-ms)}))
         pair-counts))
 
-(defn- fold
-  "Fold one fetch into the pending buffer, adding one to each pair's count."
-  [buffer user pairs]
-  (reduce (fn [b [c l]] (update b [user c l] (fnil inc 0))) buffer pairs))
-
 (defn- by-user
   "Regroup a buffer keyed by [user category label] into a map of user to a map of
   [category label] to count."
   [buffer]
   (reduce (fn [m [[user c l] n]] (assoc-in m [user [c l]] n)) {} buffer))
 
-(defn- flush-buffer
+(defn- write-buffer
   "Agent action. Drain the pending buffer to one transaction and reset it. On a
   write failure, keep the buffer so the next flush retries the counts."
-  [buffer conn half-life-days]
+  [{:keys [buffer] :as state} writer]
   (if (empty? buffer)
-    buffer
+    (assoc state :timer nil :first-ms nil)
     (try
-      (let [db       (d/db conn)
+      (let [db       (d/db (:conn writer))
             flush-ms (System/currentTimeMillis)
-            tx       (mapcat (fn [[user pcs]] (plan-fetch db user half-life-days pcs flush-ms))
+            tx       (mapcat (fn [[user pcs]] (plan-fetch db user (:half-life writer) pcs flush-ms))
                              (by-user buffer))]
-        (when (seq tx) (d/transact! conn (vec tx)))
-        {})
+        (when (seq tx) (d/transact! (:conn writer) (vec tx)))
+        (assoc state :buffer {} :timer nil :first-ms nil))
       (catch Throwable e
         (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")
-        buffer))))
+        (assoc state :timer nil :first-ms nil)))))
 
-(defn- fire!
-  "Reset the debounce state and hand the flush to the agent. Runs on the
-  scheduler thread, so it only dispatches. The agent does the write, so the
-  write stays serialized on the one consumer."
-  [{state :state lock :lock ag :agent conn :conn half-life :half-life}]
-  (locking lock (reset! state {:future nil :first-ms nil}))
-  (send-off ag flush-buffer conn half-life))
+(defn- schedule-flush!
+  "Schedule a one-shot flush, delayed by the debounce but capped so the window
+  that began at `first-ms` still flushes within the maximum wait. Return the
+  ScheduledFuture. The scheduler only hands the flush to the agent's consumer, so
+  the write stays on the one consumer thread."
+  [{:keys [scheduler debounce-ms max-wait-ms consumer] ag :agent :as writer} first-ms]
+  (let [now   (System/currentTimeMillis)
+        delay (max 0 (min (long debounce-ms) (- (+ first-ms (long max-wait-ms)) now)))]
+    ;; nil when the scheduler is shutting down, so a late fold still folds
+    (try
+      (.schedule ^ScheduledExecutorService scheduler
+                 ^Runnable (fn [] (send-via consumer ag write-buffer writer))
+                 (long delay) TimeUnit/MILLISECONDS)
+      (catch RejectedExecutionException _ nil))))
 
-(defn- reschedule!
-  "Reschedule the one-shot flush. Cancel the prior scheduled flush and schedule a
-  new one a debounce later. Cap the delay so the first pending fetch still
-  flushes within the maximum wait, which stops a sustained burst from starving
-  the flush."
-  [{:keys [scheduler state lock debounce-ms max-wait-ms] :as writer}]
-  (locking lock
-    (let [now      (System/currentTimeMillis)
-          st       @state
-          ^ScheduledFuture future (:future st)
-          first-ms (or (:first-ms st) now)
-          delay    (max 0 (min (long debounce-ms)
-                               (- (+ first-ms (long max-wait-ms)) now)))]
-      (when future (.cancel future false))
-      (let [fut (.schedule ^ScheduledExecutorService scheduler
-                           ^Runnable (fn [] (fire! writer))
-                           (long delay) TimeUnit/MILLISECONDS)]
-        (reset! state {:future fut :first-ms first-ms})))))
+(defn- absorb
+  "Agent action. Fold a fetch into the buffer, then cancel the prior scheduled
+  flush and reschedule one. A repeated pair adds one to its count."
+  [{:keys [timer first-ms] :as state} writer user pairs]
+  (let [buffer'  (reduce (fn [b [c l]] (update b [user c l] (fnil inc 0))) (:buffer state) pairs)
+        first-ms (or first-ms (System/currentTimeMillis))]
+    (when-let [^ScheduledFuture t timer] (.cancel t false))
+    (assoc state :buffer buffer' :first-ms first-ms :timer (schedule-flush! writer first-ms))))
 
 (defn writer
-  "Create the stat-write consumer with a debounced flush. Its agent holds a
-  pending buffer keyed by [user category label]. Each fetch reschedules a
-  one-shot flush a `debounce-ms` later, capped by `max-wait-ms` so a sustained
-  burst still flushes. The :continue error mode keeps the agent usable after a
-  failed action."
+  "Create the stat-write consumer with a debounced flush. Its agent value holds a
+  pending buffer keyed by [user category label], the scheduled flush, and the
+  window start. Each fetch reschedules a one-shot flush a `debounce-ms` later,
+  capped by `max-wait-ms` so a sustained burst still flushes. The agent
+  dispatches through a single-thread daemon executor it owns, so engram never
+  uses the shared agent pools. The :continue error mode keeps the agent usable
+  after a failed action."
   [conn half-life-days & {:keys [debounce-ms max-wait-ms]
                           :or   {debounce-ms 200 max-wait-ms 2000}}]
-  {:agent       (agent {} :error-mode :continue)
-   :conn        conn
-   :half-life   half-life-days
-   :scheduler   (Executors/newSingleThreadScheduledExecutor
-                 (reify ThreadFactory
-                   (newThread [_ r]
-                     (doto (Thread. ^Runnable r "engram-stat-debounce") (.setDaemon true)))))
-   :state       (atom {:future nil :first-ms nil})
-   :lock        (Object.)
-   :debounce-ms debounce-ms
-   :max-wait-ms max-wait-ms})
+  (letfn [(daemon [nm] (reify ThreadFactory
+                         (newThread [_ r] (doto (Thread. ^Runnable r nm) (.setDaemon true)))))]
+    {:agent       (agent {:buffer {} :timer nil :first-ms nil} :error-mode :continue)
+     :conn        conn
+     :half-life   half-life-days
+     :consumer    (Executors/newSingleThreadExecutor (daemon "engram-stat-consumer"))
+     :scheduler   (Executors/newSingleThreadScheduledExecutor (daemon "engram-stat-debounce"))
+     :closed?     (atom false)
+     :debounce-ms debounce-ms
+     :max-wait-ms max-wait-ms}))
 
 (defn record!
   "Fold one fetch into the buffer and reschedule the debounced flush. Return at
   once, so the caller never waits on the write and a write failure never reaches
-  the caller."
-  [{ag :agent :as writer} user pairs]
-  (send ag fold user pairs)
-  (reschedule! writer)
+  the caller. A no-op once the writer is drained."
+  [{ag :agent consumer :consumer closed? :closed? :as writer} user pairs]
+  (when-not @closed?
+    (send-via consumer ag absorb writer user pairs))
   nil)
 
 (defn drain!
-  "Cancel the pending flush, stop the scheduler, flush any pending counts, and
-  wait for the agent. Used on shutdown, so a final flush lands while the
-  connection is open."
-  [{scheduler :scheduler state :state lock :lock ag :agent conn :conn half-life :half-life}]
-  (locking lock
-    (when-let [^ScheduledFuture f (:future @state)] (.cancel f false))
-    (reset! state {:future nil :first-ms nil}))
+  "Stop taking new fetches, cancel the pending flush, drain the buffer, and shut
+  the owned executors down. Used on shutdown, so a final flush lands while the
+  connection is open. Wait by way of a promise, so it never touches the shared
+  agent pools."
+  [{:keys [scheduler consumer] ag :agent closed? :closed? :as writer}]
+  (reset! closed? true)
   (.shutdown ^ScheduledExecutorService scheduler)
-  (send-off ag flush-buffer conn half-life)
-  (await ag)
+  (let [done (promise)]
+    (send-via consumer ag
+              (fn [state]
+                (when-let [^ScheduledFuture t (:timer state)] (.cancel t false))
+                (let [drained (write-buffer (assoc state :timer nil) writer)]
+                  (deliver done true)
+                  drained)))
+    @done)
+  (.shutdown ^ExecutorService consumer)
   nil)
