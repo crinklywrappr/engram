@@ -233,6 +233,37 @@
           (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
 
+(deftest plan-batch-is-pure
+  (let [conn (fresh-conn)]
+    (try
+      (let [x    (memory/create! conn "alice" {:content "orig" :src "x" :tags [["domain" "clojure"]]})
+            db   (d/db conn)
+            plan (memory/plan-batch db "alice"
+                                    {:create [{:content "c-a" :src "a" :tags [["domain" "clojure"]]}]
+                                     :update [{:id x :content "new-x"}]}
+                                    tag-err-fn)]
+        (testing "the planner returns a plan with ids, tx-data, and an applied count"
+          (is (true? (:ok? plan)))
+          (is (== 1 (count (:ids plan))))
+          (is (seq (:tx-data plan)))
+          (is (== 2 (:applied plan))))
+        (testing "the planner writes nothing: the seed memory is unchanged and alone"
+          (is (= "orig" (:content (first (memory/query conn "alice" [["domain" "clojure"]])))))
+          (is (== 1 (count (memory/query conn "alice" [["domain" "clojure"]]))))))
+      (finally (d/close conn)))))
+
+(deftest plan-batch-reports-errors-without-tx-data
+  (let [conn (fresh-conn)]
+    (try
+      (let [plan (memory/plan-batch (d/db conn) "alice"
+                                    {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]}
+                                    tag-err-fn)]
+        (testing "a failing plan carries only the failing op and no tx-data"
+          (is (false? (:ok? plan)))
+          (is (= errors/not-found (:code (first (:errors plan)))))
+          (is (nil? (:tx-data plan)))))
+      (finally (d/close conn)))))
+
 (deftest batch-empty
   (let [conn (fresh-conn)]
     (try

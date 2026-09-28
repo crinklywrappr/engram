@@ -112,28 +112,26 @@
   per field. Reuses `->fields`, so tags and related fold only when non-empty,
   matching the single-write update path."
   [cur payload]
-  {:fields (merge (:fields cur) (->fields payload))})
+  (merge cur (->fields payload)))
 
 (def ^:private conflict-msg "the id is in both the update and the delete group")
 (def ^:private not-found-msg "no such memory for this user")
 
-(defn apply-batch!
-  "Apply a grouped batch for one user in one atomic transaction. `batch` is a map
-  with optional :create, :update, and :delete lists. `tag-error` maps a tag
-  vector to an error map or nil.
+(defn plan-batch
+  "Plan a grouped batch for `user` against the database value `db`. Pure: it
+  reads `db` and writes nothing. `batch` is a map with optional :create, :update,
+  and :delete lists. `tag-error` maps a tag vector to an error map or nil.
 
-  Pre-validate against the batch's starting state: a create or an update with
-  tags is checked against the configurations, an update or delete is resolved to
-  one of the user's own memories, and an id must not appear in both the update
-  and the delete group. Within a group, several updates to one id fold
-  cumulatively (a later entry wins a same-field tie) and a repeated delete id is
-  deduplicated. If all pass, transact once and return
-  {:ok? true :ids [create-ids...] :applied n}; else write nothing and return
-  {:ok? false :errors [{:op :i :error ...} ...]} for the failing ops only. The
+  Pre-validate against `db`: a create or an update with tags is checked against
+  the configurations, an update or delete is resolved to one of the user's own
+  memories, and an id must not appear in both the update and the delete group.
+  Within a group, several updates to one id fold cumulatively (a later entry wins
+  a same-field tie) and a repeated delete id is deduplicated. If all pass, return
+  {:ok? true :ids [create-ids...] :tx-data [...] :applied n}; else return
+  {:ok? false :errors [{:op :i :code ...} ...]} for the failing ops only. The
   index :i is 0-based within the op's own group list."
-  [conn user batch tag-error]
-  (let [db      (d/db conn)
-        creates (vec (:create batch))
+  [db user batch tag-error]
+  (let [creates (vec (:create batch))
         updates (vec (:update batch))
         deletes (vec (:delete batch))
         conflicts (st/intersection (set (map :id updates)) (set deletes))
@@ -174,13 +172,24 @@
             fold           (reduce (fn [m {:keys [eid payload]}]
                                      (update m eid merge-update-fields payload))
                                    {} update-results)
-            update-tx-data (mapcat (fn [[eid f]] (update-tx db eid (:fields f))) fold)
+            update-tx-data (mapcat (fn [[eid fields]] (update-tx db eid fields)) fold)
             delete-eids    (distinct (map :eid delete-results))
             delete-tx-data (map (fn [eid] [:db/retractEntity eid]) delete-eids)
-            tx-data        (concat create-tx-data update-tx-data delete-tx-data)]
-        (when (seq tx-data) (d/transact! conn tx-data))
-        {:ok? true :ids ids
+            tx-data        (vec (concat create-tx-data update-tx-data delete-tx-data))]
+        {:ok? true :ids ids :tx-data tx-data
          :applied (+ (count ids) (count fold) (count delete-eids))}))))
+
+(defn apply-batch!
+  "Apply a grouped batch for one user in one atomic transaction. Delegate the
+  validation and tx-data planning to `plan-batch` over the current db value, then
+  transact once on success. Return {:ok? true :ids [...] :applied n} on success,
+  or {:ok? false :errors [...]} on failure, writing nothing on failure."
+  [conn user batch tag-error]
+  (let [result (plan-batch (d/db conn) user batch tag-error)]
+    (if (:ok? result)
+      (do (when (seq (:tx-data result)) (d/transact! conn (:tx-data result)))
+          {:ok? true :ids (:ids result) :applied (:applied result)})
+      result)))
 
 ;; ---------- query ----------
 
