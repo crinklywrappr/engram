@@ -264,8 +264,8 @@
                       :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
     ["/stats"  {:get {:responses {200 {:body StatsOut}}
                       :handler (fn [req] {:status 200
-                                          :body {:stats (vec (stats/stats conn (:engram/user req)
-                                                                          (:half-life-days cfg)))}})}}]
+                                          :body {:stats (vec (stats/recalls conn (:engram/user req)
+                                                                            (:half-life-days cfg)))}})}}]
     ["/memories"       {:post {:parameters {:body CreateBody}
                                :responses  {201 {:body IdOut} 409 {:body Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]

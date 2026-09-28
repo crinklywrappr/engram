@@ -38,7 +38,7 @@
   (stat-writer/writer conn (:half-life-days config)))
 
 (defmethod ig/halt-key! :engram.stats/writer [_ writer]
-  ;; drain the pending buffer while the connection is still open
+  ;; drain the pending recalls while the connection is still open
   (stat-writer/drain! writer))
 
 (defmethod ig/init-key :engram.web/handler [_ {:keys [db config writer]}]

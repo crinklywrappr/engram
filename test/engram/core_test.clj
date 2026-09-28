@@ -131,11 +131,11 @@
 (def ^:private create-tag-err #(config/create-tag-error (:tag-schema cfg) %))
 (def ^:private update-tag-err #(config/update-tag-error (:tag-schema cfg) %))
 
-(defn- seed-fetch!
-  "Synchronously record one fetch of each pair, for test setup. Writes through
-  plan-fetch at a count of one, the same tx a single fetch produces."
+(defn- seed-recall!
+  "Synchronously record one recall of each pair, for test setup. Writes through
+  plan-recalls at a count of one, the same tx a single recall produces."
   [conn user half-life pairs]
-  (d/transact! conn (stats/plan-fetch (d/db conn) user half-life
+  (d/transact! conn (stats/plan-recalls (d/db conn) user half-life
                                       (into {} (map (fn [p] [p 1])) pairs)
                                       (System/currentTimeMillis))))
 
@@ -290,10 +290,10 @@
 (deftest stats-lifetime-and-recent
   (let [conn (fresh-conn)]
     (try
-      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
-      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
-      (let [row (first (stats/stats conn "alice" 14))]
-        (testing "lifetime counts every fetch"
+      (seed-recall! conn "alice" 14 [["domain" "clojure"]])
+      (seed-recall! conn "alice" 14 [["domain" "clojure"]])
+      (let [row (first (stats/recalls conn "alice" 14))]
+        (testing "lifetime counts every recall"
           (is (= 2 (:lifetime row))))
         (testing "recent decay count is positive and bounded by lifetime"
           (is (pos? (:recent row)))
@@ -310,7 +310,7 @@
         (run! deref fs))
       (stat-writer/drain! w)
       (testing "every concurrent increment lands, none lost to a race"
-        (is (== 50 (:lifetime (first (stats/stats conn "alice" 14))))))
+        (is (== 50 (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (d/close conn)))))
 
 (deftest stat-write-failure-is-isolated
@@ -329,10 +329,10 @@
       (dotimes [_ 5] (stat-writer/record! w"alice" [["domain" "clojure"]]))
       (testing "the flush is deferred, so no write has happened yet"
         (Thread/sleep 20)
-        (is (empty? (stats/stats conn "alice" 14))))
+        (is (empty? (stats/recalls conn "alice" 14))))
       (testing "after the debounce elapses the burst coalesces into the summed count"
         (Thread/sleep 250)
-        (is (== 5 (:lifetime (first (stats/stats conn "alice" 14))))))
+        (is (== 5 (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (stat-writer/drain! w) (d/close conn)))))
 
 (deftest stat-flush-max-wait-caps-postponement
@@ -342,38 +342,38 @@
       ;; keep rescheduling faster than the debounce; the max wait must still flush
       (dotimes [_ 8] (stat-writer/record! w"alice" [["domain" "clojure"]]) (Thread/sleep 30))
       (testing "the maximum wait flushes even though the debounce never elapses"
-        (is (pos? (:lifetime (first (stats/stats conn "alice" 14))))))
+        (is (pos? (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (stat-writer/drain! w) (d/close conn)))))
 
-(deftest plan-fetch-pure-and-coalesced
+(deftest plan-recalls-pure-and-coalesced
   (let [conn (fresh-conn)]
     (try
-      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
+      (seed-recall! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
       (let [db (d/db conn)]
         (testing "a coalesced count adds to the prior lifetime and decayed weight"
-          (let [tx (stats/plan-fetch db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
+          (let [tx (stats/plan-recalls db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
             (is (== 1 (count tx)))
             (is (== 4 (:stat/lifetime (first tx))))
             (is (< 3.0 (:stat/decayed (first tx)) 4.001))))
         (testing "a pair with no prior row starts at the count"
-          (let [tx (stats/plan-fetch db "bob" 14 {["domain" "clojure"] 2} (System/currentTimeMillis))]
+          (let [tx (stats/plan-recalls db "bob" 14 {["domain" "clojure"] 2} (System/currentTimeMillis))]
             (is (== 2 (:stat/lifetime (first tx))))
             (is (== 2.0 (:stat/decayed (first tx))))))
         (testing "an empty pair-counts plans nothing"
-          (is (= [] (stats/plan-fetch db "alice" 14 {} (System/currentTimeMillis)))))
+          (is (= [] (stats/plan-recalls db "alice" 14 {} (System/currentTimeMillis)))))
         (testing "the planner writes nothing: the stored lifetime is still one"
-          (is (== 1 (:lifetime (first (stats/stats conn "alice" 14)))))))
+          (is (== 1 (:lifetime (first (stats/recalls conn "alice" 14)))))))
       (finally (d/close conn)))))
 
 (deftest stats-injective-across-user-space
   (let [conn (fresh-conn)]
     (try
-      (seed-fetch! conn "alice one" 14 [["domain" "clojure"]])
-      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
-      (seed-fetch! conn "alice" 14 [["domain" "clojure"]])
+      (seed-recall! conn "alice one" 14 [["domain" "clojure"]])
+      (seed-recall! conn "alice" 14 [["domain" "clojure"]])
+      (seed-recall! conn "alice" 14 [["domain" "clojure"]])
       (testing "user ids that differ by a space keep separate rows via the composite tuple"
-        (is (= 1 (:lifetime (first (stats/stats conn "alice one" 14)))))
-        (is (= 2 (:lifetime (first (stats/stats conn "alice" 14))))))
+        (is (= 1 (:lifetime (first (stats/recalls conn "alice one" 14)))))
+        (is (= 2 (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (d/close conn)))))
 
 ;; ---------- handler: auth, 409, streaming ----------
