@@ -62,9 +62,9 @@ lately, kept beside the lifetime count.
 _Avoid_: score, frequency, weight
 
 **Batch**:
-An ordered list of operations a client applies in one atomic call. All of the
-operations apply, or none do.
-_Avoid_: bulk, group, transaction
+A grouped map of operations a client applies in one atomic call. It has a create,
+an update, and a delete group. All of the operations apply, or none do.
+_Avoid_: bulk, transaction
 
 **Operation**:
 One create, update, or delete inside a batch. Its verb names which of the three

@@ -113,71 +113,73 @@
   [cur payload]
   {:fields (merge (:fields cur) (->fields payload))})
 
+(def ^:private conflict-msg "the id is in both the update and the delete group")
+(def ^:private not-found-msg "no such memory for this user")
+
 (defn apply-batch!
-  "Apply an ordered, flattened op list for one user in one atomic transaction.
-  Each op is {:i n :op verb :payload p}, verb one of \"create\", \"update\",
-  \"delete\". `tag-error` maps a tag vector to an error map or nil.
+  "Apply a grouped batch for one user in one atomic transaction. `batch` is a map
+  with optional :create, :update, and :delete lists. `tag-error` maps a tag
+  vector to an error map or nil.
 
-  Pre-validate every op against the batch's starting state: a create or an update
-  with tags is checked against the configurations, an update or delete is resolved
-  to one of the user's own memories, and a delete makes its id terminal so a later
-  op on that id fails. If all pass, transact once and return
+  Pre-validate against the batch's starting state: a create or an update with
+  tags is checked against the configurations, an update or delete is resolved to
+  one of the user's own memories, and an id must not appear in both the update
+  and the delete group. Within a group, several updates to one id fold
+  cumulatively (a later entry wins a same-field tie) and a repeated delete id is
+  deduplicated. If all pass, transact once and return
   {:ok? true :ids [create-ids...] :applied n}; else write nothing and return
-  {:ok? false :errors [{:i :op :error ...} ...]} for the failing ops only."
-  [conn user ops tag-error]
-  (let [db (d/db conn)]
-    (loop [[{:keys [i op payload] :as o} & more] ops
-           deleted #{}
-           creates []
-           fold    {}
-           errors  []]
-      (if (nil? o)
-        (if (seq errors)
-          {:ok? false :errors errors}
-          (let [pairs          (mapv #(create-tx user %) creates)
-                ids            (mapv (comp str first) pairs)
-                create-tx-data (map second pairs)
-                upd-tx-data    (mapcat (fn [[eid st]]
-                                         (if (:deleted st)
-                                           [[:db/retractEntity eid]]
-                                           (update-tx db eid (:fields st))))
-                                       fold)
-                tx-data        (concat create-tx-data upd-tx-data)]
-            (when (seq tx-data) (d/transact! conn tx-data))
-            {:ok? true :ids ids :applied (count ops)}))
-        (case op
-          "create"
-          (let [err (tag-error (or (:tags payload) []))]
-            (recur more deleted (conj creates payload) fold
-                   (cond-> errors err (conj (merge {:i i :op op} err)))))
-
-          "update"
-          (let [id (:id payload)]
-            (if (deleted id)
-              (recur more deleted creates fold
-                     (conj errors {:i i :op op :error "deleted"
-                                   :message "the memory was deleted earlier in the batch"}))
-              (if-let [eid (eid-of db user id)]
-                (if-let [err (when (seq (:tags payload)) (tag-error (:tags payload)))]
-                  (recur more deleted creates fold (conj errors (merge {:i i :op op} err)))
-                  (recur more deleted creates
-                         (update fold eid merge-update-fields payload)
-                         errors))
-                (recur more deleted creates fold
-                       (conj errors {:i i :op op :error "not-found"
-                                     :message "no such memory for this user"})))))
-
-          "delete"
-          (let [id payload]
-            (if (deleted id)
-              (recur more deleted creates fold
-                     (conj errors {:i i :op op :error "deleted"
-                                   :message "the memory was deleted earlier in the batch"}))
-              (if-let [eid (eid-of db user id)]
-                (recur more (conj deleted id) creates (assoc fold eid {:deleted true}) errors)
-                (recur more deleted creates fold
-                       (conj errors {:i i :op op :error "not-found"
-                                     :message "no such memory for this user"}))))))))))
+  {:ok? false :errors [{:op :i :error ...} ...]} for the failing ops only. The
+  index :i is 0-based within the op's own group list."
+  [conn user batch tag-error]
+  (let [db      (d/db conn)
+        creates (vec (:create batch))
+        updates (vec (:update batch))
+        deletes (vec (:delete batch))
+        conflicts (st/intersection (set (map :id updates)) (set deletes))
+        create-errs
+        (keep-indexed
+         (fn [i p] (when-let [e (tag-error (or (:tags p) []))]
+                     (merge {:op "create" :i i} e)))
+         creates)
+        update-results
+        (map-indexed
+         (fn [i p]
+           (let [id (:id p)]
+             (cond
+               (conflicts id) {:error {:op "update" :i i :error "conflict" :message conflict-msg}}
+               :else (if-let [eid (eid-of db user id)]
+                       (if-let [e (when (seq (:tags p)) (tag-error (:tags p)))]
+                         {:error (merge {:op "update" :i i} e)}
+                         {:eid eid :payload p})
+                       {:error {:op "update" :i i :error "not-found" :message not-found-msg}}))))
+         updates)
+        delete-results
+        (map-indexed
+         (fn [i id]
+           (cond
+             (conflicts id) {:error {:op "delete" :i i :error "conflict" :message conflict-msg}}
+             :else (if-let [eid (eid-of db user id)]
+                     {:eid eid}
+                     {:error {:op "delete" :i i :error "not-found" :message not-found-msg}})))
+         deletes)
+        errors (vec (concat create-errs
+                            (keep :error update-results)
+                            (keep :error delete-results)))]
+    (if (seq errors)
+      {:ok? false :errors errors}
+      (let [pairs          (mapv #(create-tx user %) creates)
+            ids            (mapv (comp str first) pairs)
+            create-tx-data (map second pairs)
+            fold           (reduce (fn [m {:keys [eid payload]}]
+                                     (update m eid merge-update-fields payload))
+                                   {} update-results)
+            update-tx-data (mapcat (fn [[eid f]] (update-tx db eid (:fields f))) fold)
+            delete-eids    (distinct (map :eid delete-results))
+            delete-tx-data (map (fn [eid] [:db/retractEntity eid]) delete-eids)
+            tx-data        (concat create-tx-data update-tx-data delete-tx-data)]
+        (when (seq tx-data) (d/transact! conn tx-data))
+        {:ok? true :ids ids
+         :applied (+ (count ids) (count fold) (count delete-eids))}))))
 
 ;; ---------- query ----------
 

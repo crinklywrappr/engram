@@ -53,15 +53,14 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
-;; The batch body: an ordered list of grouped [verb, payloads] runs. The verb
-;; dispatches the payload shape, so a malformed op or an unknown verb is a 400.
+;; The batch body: a map of grouped operations, each key optional. Order carries
+;; no meaning across groups (see docs/adr/0002-batch-request-grouped-map.md). A
+;; wrong-typed group is a malformed request -> 400 at coercion.
 (def ^:private BatchBody
   [:map
-   [:ops [:vector
-          [:multi {:dispatch first}
-           ["create" [:tuple [:= "create"] [:vector CreateBody]]]
-           ["update" [:tuple [:= "update"] [:vector UpdatePayload]]]
-           ["delete" [:tuple [:= "delete"] [:vector IdStr]]]]]]])
+   [:create {:optional true} [:vector CreateBody]]
+   [:update {:optional true} [:vector UpdatePayload]]
+   [:delete {:optional true} [:vector IdStr]]])
 
 ;; ---------- response schemas (malli coercion -> validated + swagger) ----------
 
@@ -218,20 +217,10 @@
       {:status 200 :body {:deleted id}}
       {:status 404 :body {:error "not found"}})))
 
-(defn- flatten-ops
-  "Flatten grouped [verb payloads] runs into an ordered op seq, giving each op a
-  running 0-based index i across all payloads in listed order."
-  [ops]
-  (first
-   (reduce (fn [[acc i] [verb payloads]]
-             [(into acc (map-indexed (fn [j p] {:i (+ i j) :op verb :payload p}) payloads))
-              (+ i (count payloads))])
-           [[] 0] ops)))
-
 (defn- batch-handler [conn cfg req]
   (let [user   (:engram/user req)
-        ops    (flatten-ops (get-in req [:parameters :body :ops]))
-        result (memory/apply-batch! conn user ops #(config/tag-error (:tag-schema cfg) %))]
+        batch  (get-in req [:parameters :body])
+        result (memory/apply-batch! conn user batch #(config/tag-error (:tag-schema cfg) %))]
     (if (:ok? result)
       {:status 200 :body {:ids (:ids result) :applied (:applied result)}}
       (let [errors (mapv (fn [e]

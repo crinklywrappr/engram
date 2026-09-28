@@ -128,18 +128,18 @@
 
 (def ^:private tag-err-fn #(config/tag-error (:tag-schema cfg) %))
 
-(defn- mkop [i verb payload] {:i i :op verb :payload payload})
-
 (deftest batch-all-pass
   (let [conn (fresh-conn)]
     (try
       (let [x   (memory/create! conn "alice" {:content "orig-x" :src "x" :tags [["domain" "clojure"]]})
             y   (memory/create! conn "alice" {:content "orig-y" :src "y" :tags [["domain" "clojure"]]})
-            ops [(mkop 0 "create" {:content "c-a" :src "a" :tags [["domain" "clojure"]]})
-                 (mkop 1 "update" {:id x :content "new-x"})
-                 (mkop 2 "delete" y)]
-            res (memory/apply-batch! conn "alice" ops tag-err-fn)]
-        (testing "the batch reports success, one new id, and the applied count"
+            res (memory/apply-batch!
+                 conn "alice"
+                 {:create [{:content "c-a" :src "a" :tags [["domain" "clojure"]]}]
+                  :update [{:id x :content "new-x"}]
+                  :delete [y]}
+                 tag-err-fn)]
+        (testing "the batch reports success, one new id, and three memories written"
           (is (true? (:ok? res)))
           (is (== 1 (count (:ids res))))
           (is (== 3 (:applied res))))
@@ -155,12 +155,14 @@
 (deftest batch-bad-tag-writes-nothing
   (let [conn (fresh-conn)]
     (try
-      (let [ops [(mkop 0 "create" {:content "ok" :src "a" :tags [["domain" "clojure"]]})
-                 (mkop 1 "create" {:content "bad" :src "b" :tags [["tech" "datalevin"]]})]
-            res (memory/apply-batch! conn "alice" ops tag-err-fn)]
-        (testing "the batch is rejected and names only the failing op by index"
+      (let [res (memory/apply-batch!
+                 conn "alice"
+                 {:create [{:content "ok" :src "a" :tags [["domain" "clojure"]]}
+                           {:content "bad" :src "b" :tags [["tech" "datalevin"]]}]}
+                 tag-err-fn)]
+        (testing "the batch is rejected and names only the failing op by its group index"
           (is (false? (:ok? res)))
-          (is (= [1] (map :i (:errors res))))
+          (is (= [{:op "create" :i 1}] (map #(select-keys % [:op :i]) (:errors res))))
           (is (= "no-configuration" (:error (first (:errors res))))))
         (testing "nothing was written, not even the valid create"
           (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
@@ -172,15 +174,16 @@
       (testing "an update and a delete of a missing id both fail as not-found"
         (let [res (memory/apply-batch!
                    conn "alice"
-                   [(mkop 0 "update" {:id (str (java.util.UUID/randomUUID)) :content "x"})
-                    (mkop 1 "delete" (str (java.util.UUID/randomUUID)))]
+                   {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]
+                    :delete [(str (java.util.UUID/randomUUID))]}
                    tag-err-fn)]
           (is (false? (:ok? res)))
-          (is (= [0 1] (map :i (:errors res))))
+          (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
+                 (set (map #(select-keys % [:op :i]) (:errors res)))))
           (is (= #{"not-found"} (set (map :error (:errors res)))))))
       (let [x (memory/create! conn "alice" {:content "alice only" :src "x" :tags [["domain" "clojure"]]})]
         (testing "another user cannot delete it, and it survives"
-          (let [res (memory/apply-batch! conn "bob" [(mkop 0 "delete" x)] tag-err-fn)]
+          (let [res (memory/apply-batch! conn "bob" {:delete [x]} tag-err-fn)]
             (is (false? (:ok? res)))
             (is (= "not-found" (:error (first (:errors res))))))
           (is (== 1 (count (memory/query conn "alice" [["domain" "clojure"]]))))))
@@ -190,39 +193,54 @@
   (let [conn (fresh-conn)]
     (try
       (let [x   (memory/create! conn "alice" {:content "orig" :src "x" :tags [["domain" "clojure"]]})
-            res (memory/apply-batch! conn "alice"
-                                     [(mkop 0 "update" {:id x :content "c2"})
-                                      (mkop 1 "update" {:id x :related ["y"]})]
-                                     tag-err-fn)]
-        (testing "two updates to one id are cumulative per field"
+            res (memory/apply-batch!
+                 conn "alice"
+                 {:update [{:id x :content "c2"} {:id x :related ["y"]}]}
+                 tag-err-fn)]
+        (testing "several updates to one id fold cumulatively per field, writing one memory"
           (is (true? (:ok? res)))
+          (is (== 1 (:applied res)))
           (let [m (first (memory/query conn "alice" [["domain" "clojure"]]))]
             (is (= "c2" (:content m)))
             (is (= ["y"] (:related m))))))
       (finally (d/close conn)))))
 
-(deftest batch-delete-is-terminal
+(deftest batch-update-delete-conflict
   (let [conn (fresh-conn)]
     (try
       (let [x   (memory/create! conn "alice" {:content "orig" :src "x" :tags [["domain" "clojure"]]})
-            res (memory/apply-batch! conn "alice"
-                                     [(mkop 0 "delete" x)
-                                      (mkop 1 "update" {:id x :content "after"})]
-                                     tag-err-fn)]
-        (testing "a later op on a deleted id rejects the whole batch and writes nothing"
+            res (memory/apply-batch!
+                 conn "alice"
+                 {:update [{:id x :content "after"}] :delete [x]}
+                 tag-err-fn)]
+        (testing "an id in both update and delete flags both ops and writes nothing"
           (is (false? (:ok? res)))
-          (is (= "deleted" (:error (first (filter #(== 1 (:i %)) (:errors res))))))
+          (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
+                 (set (map #(select-keys % [:op :i]) (:errors res)))))
+          (is (= #{"conflict"} (set (map :error (:errors res)))))
           (is (= "orig" (:content (first (memory/query conn "alice" [["domain" "clojure"]])))))))
+      (finally (d/close conn)))))
+
+(deftest batch-duplicate-delete-tolerated
+  (let [conn (fresh-conn)]
+    (try
+      (let [x   (memory/create! conn "alice" {:content "orig" :src "x" :tags [["domain" "clojure"]]})
+            res (memory/apply-batch! conn "alice" {:delete [x x]} tag-err-fn)]
+        (testing "a repeated delete id is deduplicated, deletes once, no error"
+          (is (true? (:ok? res)))
+          (is (== 1 (:applied res)))
+          (is (empty? (memory/query conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
 
 (deftest batch-empty
   (let [conn (fresh-conn)]
     (try
-      (let [res (memory/apply-batch! conn "alice" [] tag-err-fn)]
-        (testing "an empty batch succeeds with no ids and applied 0"
-          (is (true? (:ok? res)))
-          (is (= [] (:ids res)))
-          (is (== 0 (:applied res)))))
+      (doseq [b [{} {:create [] :update [] :delete []}]]
+        (let [res (memory/apply-batch! conn "alice" b tag-err-fn)]
+          (testing "an empty batch succeeds with no ids and applied 0"
+            (is (true? (:ok? res)))
+            (is (= [] (:ids res)))
+            (is (== 0 (:applied res))))))
       (finally (d/close conn)))))
 
 ;; ---------- stats ----------
@@ -324,11 +342,11 @@
   (let [conn (fresh-conn)
         app  (handler/app conn cfg)]
     (try
-      (testing "a grouped run of creates returns 200 with ids and an applied count"
+      (testing "a grouped-map batch of creates returns 200 with ids and an applied count"
         (let [resp (request app :post "/memories/batch"
                             {:user "alice" :accept "application/json"
-                             :body {:ops [["create" [{:content "f1" :src "a" :tags [["domain" "clojure"]]}
-                                                     {:content "f2" :src "b" :tags [["domain" "clojure"]]}]]]}})
+                             :body {:create [{:content "f1" :src "a" :tags [["domain" "clojure"]]}
+                                             {:content "f2" :src "b" :tags [["domain" "clojure"]]}]}})
               body (body-json resp)]
           (is (== 200 (:status resp)))
           (is (== 2 (count (:ids body))))
@@ -336,22 +354,23 @@
       (testing "a bad tag rejects the batch with 422 and the configurations on the failing entry"
         (let [resp (request app :post "/memories/batch"
                             {:user "alice" :accept "application/json"
-                             :body {:ops [["create" [{:content "bad" :src "c" :tags [["tech" "datalevin"]]}]]]}})
+                             :body {:create [{:content "bad" :src "c" :tags [["tech" "datalevin"]]}]}})
               body (body-json resp)]
           (is (== 422 (:status resp)))
+          (is (= "create" (:op (first (:errors body)))))
           (is (== 0 (:i (first (:errors body)))))
           (is (some? (:configurations (first (:errors body)))))))
       (testing "an empty batch returns 200 with no ids"
         (let [resp (request app :post "/memories/batch"
-                            {:user "alice" :accept "application/json" :body {:ops []}})
+                            {:user "alice" :accept "application/json" :body {}})
               body (body-json resp)]
           (is (== 200 (:status resp)))
           (is (= [] (:ids body)))
           (is (== 0 (:applied body)))))
-      (testing "an unknown verb is a malformed op and returns 400"
+      (testing "a create payload missing a required field is malformed and returns 400"
         (is (== 400 (:status (request app :post "/memories/batch"
                                       {:user "alice" :accept "application/json"
-                                       :body {:ops [["frob" [{:content "x" :src "a"}]]]}})))))
+                                       :body {:create [{:content "x"}]}})))))
       (finally (d/close conn)))))
 
 (deftest query-json-fallback-shape
