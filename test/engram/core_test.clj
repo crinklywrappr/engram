@@ -583,13 +583,14 @@
       (seed-recall! conn "alice" (:half-life-days cfg) [["domain" "clojure"]])
       (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
             body (body-json resp)]
-        (testing "the stats body nests the recall rows under :stats then :recalls"
+        (testing "the stats body nests the recall rows under :stats then :recalls, as tuples"
           (is (== 200 (:status resp)))
           (is (vector? (get-in body [:stats :recalls])))
           (let [row (first (get-in body [:stats :recalls]))]
-            (is (= "domain" (:category row)))
-            (is (= "clojure" (:label row)))
-            (is (== 1 (:lifetime row))))))
+            (is (= "domain" (nth row 0)))
+            (is (= "clojure" (nth row 1)))
+            (is (== 1 (nth row 2)))
+            (is (number? (nth row 3))))))
       (finally (d/close conn)))))
 
 (deftest error-logging-and-correlation-id

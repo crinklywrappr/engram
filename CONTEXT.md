@@ -59,7 +59,8 @@ _Avoid_: query, request, fetch
 
 **Recall count**:
 How often a category:label pair was recalled. engram keeps it as a lifetime
-total and a recent decay measure.
+total and a recent decay measure. On the wire a recall count is a positional row
+of category, label, lifetime, and recent.
 _Avoid_: hits, fetch count
 
 **Lifetime count**:

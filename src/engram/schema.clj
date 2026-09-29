@@ -55,11 +55,11 @@
 
 (def ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
 ;; /stats nests the recall rows under :stats then :recalls, so a later stat type
-;; can sit beside recalls without breaking the envelope. Response coercion strips
-;; undeclared keys, so the schema names every key a row carries.
+;; can sit beside recalls without breaking the envelope. Each row is a positional
+;; tuple [category label lifetime recent], matching the positional pair the recall
+;; body takes.
 (def StatsOut
-  [:map [:stats [:map [:recalls [:vector [:map [:category :string] [:label :string]
-                                          [:lifetime :int] [:recent number?]]]]]]])
+  [:map [:stats [:map [:recalls [:vector [:tuple :string :string :int number?]]]]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
 (def ErrorOut   [:map [:error :string]])
