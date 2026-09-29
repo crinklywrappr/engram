@@ -17,15 +17,21 @@
     {:memory/tag [:tag/category :tag/label]}])
 
 (defn- ->wire
-  "Shape a pulled memory into the JSON wire form (dates as strings)."
+  "Shape a pulled memory into the JSON wire form (dates as strings). Omit an
+  empty tags vector, an empty related vector, and a nil timestamp, so a bare
+  memory carries no empty or null key on the recall wire."
   [m]
-  {:id         (str (:memory/id m))
-   :content    (:memory/content m)
-   :src        (:memory/src m)
-   :related    (vec (:memory/related m))
-   :tags       (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))
-   :created-at (some-> ^Date (:memory/created-at m) .toInstant str)
-   :updated-at (some-> ^Date (:memory/updated-at m) .toInstant str)})
+  (let [related (vec (:memory/related m))
+        tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))
+        created (some-> ^Date (:memory/created-at m) .toInstant str)
+        updated (some-> ^Date (:memory/updated-at m) .toInstant str)]
+    (cond-> {:id      (str (:memory/id m))
+             :content (:memory/content m)
+             :src     (:memory/src m)}
+      (seq tags)    (assoc :tags tags)
+      (seq related) (assoc :related related)
+      created       (assoc :created-at created)
+      updated       (assoc :updated-at updated))))
 
 (defn- tag-tx [[category label]] {:tag/category category :tag/label label})
 

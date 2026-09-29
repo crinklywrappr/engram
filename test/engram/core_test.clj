@@ -569,9 +569,11 @@
           (is (== 200 (:status resp)))
           (is (vector? (:pairs body)))
           (is (vector? (:memories body))))
-        (testing "each memory carries the wire keys"
-          (is (= #{:id :content :src :related :tags :created-at :updated-at}
-                 (set (keys (first (:memories body))))))))
+        (testing "each memory carries the wire keys, and an empty related is omitted"
+          (let [m (first (:memories body))]
+            (is (= #{:id :content :src :tags :created-at :updated-at}
+                   (set (keys m))))
+            (is (not (contains? m :related))))))
       (finally (d/close conn)))))
 
 (deftest handler-stats-nested-shape
