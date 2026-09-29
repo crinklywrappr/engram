@@ -60,6 +60,11 @@
         (ndjson-response {:header true :pairs pairs} mems)
         {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
 
+(defn- stats-handler [conn cfg req]
+  (let [user (:engram/user req)]
+    {:status 200
+     :body {:stats {:recalls (vec (stats/recalls conn user (:half-life-days cfg)))}}}))
+
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations
   attached, so the client can refresh its cache."
@@ -128,9 +133,7 @@
     ["/config" {:get {:responses {200 {:body schema/ConfigOut}}
                       :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
     ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
-                      :handler (fn [req] {:status 200
-                                          :body {:stats {:recalls (vec (stats/recalls conn (:engram/user req)
-                                                                                      (:half-life-days cfg)))}}})}}]
+                      :handler (fn [req] (stats-handler conn cfg req))}}]
     ["/memories"       {:post {:parameters {:body schema/CreateBody}
                                :responses  {201 {:body schema/IdOut} 409 {:body schema/Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
