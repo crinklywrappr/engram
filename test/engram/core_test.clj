@@ -425,6 +425,24 @@
                     (rest lines)))))
       (finally (d/close conn)))))
 
+(deftest handler-recall-streams-all-rows
+  ;; A recall of many matched memories streams every row over NDJSON: the header
+  ;; line plus one line per memory, with nothing dropped.
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))
+        n    40]
+    (try
+      (dotimes [i n]
+        (memory/create! conn "alice" {:content (str "m" i) :src (str "s" i)
+                                      :tags [["domain" "clojure"]]}))
+      (let [resp  (request app :post "/memories/recall"
+                           {:user "alice" :accept "application/x-ndjson"
+                            :body {:pairs [["domain" "clojure"]]}})
+            lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
+        (testing "every matched memory streams, not just the first chunk"
+          (is (= (inc n) (count lines)))))          ; header line + n memories
+      (finally (d/close conn)))))
+
 (deftest handler-delete
   (let [conn (fresh-conn)
         app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
