@@ -247,6 +247,7 @@
     (seq frontier)
     (recur db user seen pending #{}
            (conj lookup+args [(partial eids-by-srcs db user)
+                              ;; :none is the no-related sentinel, never a real src
                               (disj frontier :none)]))))
 
 (defn recall
