@@ -31,11 +31,11 @@ Examples:
 ```bash
 ssh engram GET /config < /dev/null
 ssh engram GET /stats  < /dev/null
-echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/query
+echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
 ```
 
-The fetch call streams NDJSON: the first line is a header object, and every line
+The recall call streams NDJSON: the first line is a header object, and every line
 after it is one memory.
 
 ## Session start: load the configuration once
@@ -50,7 +50,7 @@ configuration. Keep this in mind for the rest of the session.
 1. `ssh engram GET /stats` returns your recall counts. The body is
    `{"stats": {"recalls": [ ... ]}}`. Each entry is a `category:label` pair with a
    `lifetime` and a `recent` value. Use them to choose the pairs worth loading.
-2. `POST /memories/query` with `{"pairs": [["category","label"], ...]}` returns
+2. `POST /memories/recall` with `{"pairs": [["category","label"], ...]}` returns
    the matching memories plus every memory linked to them through `related`,
    followed transitively. Read every line after the header line.
 

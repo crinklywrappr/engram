@@ -13,7 +13,7 @@ talks over SSH, so no secret ever lands in a settings file.
   and writes always filter by user, so one user never sees another's memories.
 - Auth is a forced-command SSH proxy. `engram-proxy` adds the trusted
   `X-Engram-User` header and forwards to the server on localhost.
-- The fetch call returns matches plus the transitive related-by-`src` closure,
+- The recall call returns matches plus the transitive related-by-`src` closure,
   streamed as NDJSON so a large response never has to be held whole in memory.
 
 The full design record is in `docs/` and the plan file.
@@ -73,7 +73,7 @@ All routes below require the `X-Engram-User` header that `engram-proxy` injects.
 | ------ | ------------------ | ---------------------------------------------- |
 | GET    | `/config`          | The array of acceptable category configurations |
 | GET    | `/stats`           | The caller's `category:label` counts           |
-| POST   | `/memories/query`  | Fetch matches plus the transitive closure      |
+| POST   | `/memories/recall` | Recall matches plus the transitive closure     |
 | POST   | `/memories`        | Create one atomic fact                         |
 | PUT    | `/memories/:id`    | Correct a fact                                 |
 | GET    | `/healthz`         | Health check                                   |

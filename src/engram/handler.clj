@@ -3,7 +3,7 @@
   requires the trusted X-Engram-User header that engram-proxy injects. Request
   bodies are validated by malli coercion, so a malformed shape returns 400. A
   memory's tags are validated against the admin configurations, so a mismatch
-  returns 409. The fetch route streams NDJSON when asked, so an arbitrarily large
+  returns 409. The recall route streams NDJSON when asked, so an arbitrarily large
   response never has to be held whole in memory."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
@@ -40,7 +40,7 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
-(def ^:private QueryBody
+(def ^:private RecallBody
   [:map [:pairs [:vector config/Pair]]])
 
 ;; A memory id on the wire: the string form of a UUID. Anchored, because malli
@@ -87,9 +87,9 @@
 ;; keys, so the schema must name every key the body carries.
 (def ^:private Conflict   [:map [:error :string] [:message :string]
                                  [:configurations [:vector [:map-of :string :string]]]])
-;; The NDJSON fetch is a stream, which response coercion cannot check, so the
-;; query route declares no :responses. This is the JSON fallback shape.
-(def ^:private QueryOut   [:map [:pairs [:vector [:tuple :string :string]]]
+;; The NDJSON recall is a stream, which response coercion cannot check, so the
+;; recall route declares no :responses. This is the JSON fallback shape.
+(def ^:private RecallOut   [:map [:pairs [:vector [:tuple :string :string]]]
                                 [:memories [:vector MemoryOut]]])
 ;; A passed batch echoes the new ids in create order plus an applied count. A
 ;; rejected batch reports only the failing ops; declare every key an entry can
@@ -106,7 +106,7 @@
 (defn- wrap-user
   "Require the trusted X-Engram-User header and hold it to the token shape. A
   missing header is a 401. A malformed user id is a 400, so a space or any other
-  out-of-shape value never reaches a stat key or a query."
+  out-of-shape value never reaches a stat key or a recall."
   [handler]
   (fn [req]
     (let [u (get-in req [:headers "x-engram-user"])]
@@ -190,11 +190,11 @@
 
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
-(defn- query-handler [conn writer req]
+(defn- recall-handler [conn writer req]
   (let [user  (:engram/user req)
         pairs (get-in req [:parameters :body :pairs])]
     (stat-writer/record! writer user pairs)
-    (let [mems (memory/query conn user pairs)]
+    (let [mems (memory/recall conn user pairs)]
       (if (wants-ndjson? req)
         (ndjson-response {:header true :pairs pairs} mems)
         {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
@@ -276,9 +276,9 @@
     ["/memories/batch" {:post {:parameters {:body BatchBody}
                                :responses  {200 {:body BatchOut} 422 {:body BatchError}}
                                :handler (fn [req] (batch-handler conn cfg req))}}]
-    ;; No :responses: the NDJSON stream cannot be response-coerced (see QueryOut).
-    ["/memories/query" {:post {:parameters {:body QueryBody}
-                               :handler (fn [req] (query-handler conn writer req))}}]
+    ;; No :responses: the NDJSON stream cannot be response-coerced (see RecallOut).
+    ["/memories/recall" {:post {:parameters {:body RecallBody}
+                                :handler (fn [req] (recall-handler conn writer req))}}]
     ["/memories/:id"   {:put    {:parameters {:path [:map [:id IdStr]] :body UpdateBody}
                                  :responses  {200 {:body IdOut} 404 {:body ErrorOut} 409 {:body Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}

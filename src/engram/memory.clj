@@ -3,7 +3,7 @@
   as its first argument. Lifecycle lives in engram.system.
 
   A memory is one atomic fact owned by a user. Reads and writes always filter by
-  user, so one user never sees another's memories. A query matches memories by
+  user, so one user never sees another's memories. A recall matches memories by
   category:label pairs, then walks the related-by-src graph transitively to pull
   in linked memories the pairs did not name."
   (:require [datalevin.core :as d]
@@ -192,7 +192,7 @@
           {:ok? true :ids (:ids result) :applied (:applied result)})
       result)))
 
-;; ---------- query ----------
+;; ---------- recall ----------
 
 (defn- eids-by-pair [db user [category label]]
   (d/q '[:find ?e (distinct ?r)
@@ -220,7 +220,7 @@
          db user (vec srcs))
     []))
 
-(defn- query'
+(defn- query
   "Walk the transitive related-by-src closure, emitting one wire memory per
   entity as a lazy sequence, deduplicated by `seen`. `pending` is a queue of
   matched rows awaiting emission, each an `[eid srcs]` pair. `frontier` is the
@@ -233,11 +233,11 @@
     (seq pending)
     (loop [[[eid srcs] & more] pending]
       (cond
-        (nil? eid) (lazy-seq (query' db user seen [] frontier lookup+args))
+        (nil? eid) (lazy-seq (query db user seen [] frontier lookup+args))
         (seen eid) (recur more)
         :else (cons (->wire (d/pull db pull-pattern eid))
                     (lazy-seq
-                     (query' db user (conj seen eid) more
+                     (query db user (conj seen eid) more
                              (st/union frontier srcs) lookup+args)))))
 
     (seq lookup+args)
@@ -249,11 +249,11 @@
            (conj lookup+args [(partial eids-by-srcs db user)
                               (disj frontier :none)]))))
 
-(defn query
+(defn recall
   "Return a lazy seq of wire memories: the pair matches for `user` plus the
   transitive related-by-src closure, deduped. Responses are not truncated. The
   seq is lazy over an immutable db snapshot, so realize it while `conn` is open."
   [conn user pairs]
   (let [db (d/db conn)
         f (partial eids-by-pair db user)]
-    (query' db user #{} [] #{} (map (partial vector f) pairs))))
+    (query db user #{} [] #{} (map (partial vector f) pairs))))
