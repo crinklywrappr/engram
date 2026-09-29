@@ -4,12 +4,18 @@
   bodies are validated by malli coercion, so a malformed shape returns 400. A
   memory's tags are validated against the admin configurations, so a mismatch
   returns 409. The recall route streams NDJSON when asked, so an arbitrarily large
-  response never has to be held whole in memory."
+  response never has to be held whole in memory.
+
+  The wire schemas live in `engram.schema`. The cross-cutting middleware lives in
+  `engram.middleware`. This namespace holds the handlers, the route table, and the
+  `app` entry point."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [engram.config :as config]
             [engram.errors :as errors]
             [engram.memory :as memory]
+            [engram.middleware :as mw]
+            [engram.schema :as schema]
             [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
             [jsonista.core :as json]
@@ -17,157 +23,12 @@
             [reitit.coercion.malli :as rcm]
             [reitit.ring :as ring]
             [reitit.ring.coercion :as rrc]
-            [reitit.ring.middleware.exception :as exception]
             [reitit.ring.middleware.muuntaja :as muuntaja]
             [reitit.ring.middleware.parameters :as parameters]
             [reitit.swagger :as swagger]
             [reitit.swagger-ui :as swagger-ui]
             [ring.util.io :as rio]
             [taoensso.telemere :as t]))
-
-;; ---------- request schemas (the static shape; malli coercion -> 400) ----------
-
-(def ^:private CreateBody
-  [:map
-   [:content [:string {:min 1}]]
-   [:src config/Token]
-   [:tags {:optional true} [:vector config/Pair]]
-   [:related {:optional true} [:vector config/Token]]])
-
-(def ^:private UpdateBody
-  [:map
-   [:content {:optional true} [:string {:min 1}]]
-   [:tags {:optional true} [:vector config/Pair]]
-   [:related {:optional true} [:vector config/Token]]])
-
-(def ^:private RecallBody
-  [:map [:pairs [:vector config/Pair]]])
-
-;; A memory id on the wire: the string form of a UUID. Anchored, because malli
-;; `:re` uses `re-find`. A non-uuid id is a malformed op -> 400 at coercion.
-(def ^:private IdStr
-  [:re #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"])
-
-(def ^:private UpdatePayload
-  [:map
-   [:id IdStr]
-   [:content {:optional true} [:string {:min 1}]]
-   [:tags {:optional true} [:vector config/Pair]]
-   [:related {:optional true} [:vector config/Token]]])
-
-;; The batch body: a map of grouped operations, each key optional. Order carries
-;; no meaning across groups (see docs/adr/0002-batch-request-grouped-map.md). A
-;; wrong-typed group is a malformed request -> 400 at coercion.
-(def ^:private BatchBody
-  [:map
-   [:create {:optional true} [:vector CreateBody]]
-   [:update {:optional true} [:vector UpdatePayload]]
-   [:delete {:optional true} [:vector IdStr]]])
-
-;; ---------- response schemas (malli coercion -> validated + swagger) ----------
-
-(def ^:private MemoryOut
-  [:map
-   [:id :string] [:content :string] [:src :string]
-   [:related [:vector :string]]
-   [:tags [:vector [:tuple :string :string]]]
-   [:created-at [:maybe :string]] [:updated-at [:maybe :string]]])
-
-(def ^:private ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
-;; /stats nests the recall rows under :stats then :recalls, so a later stat type
-;; can sit beside recalls without breaking the envelope. Response coercion strips
-;; undeclared keys, so the schema names every key a row carries.
-(def ^:private StatsOut
-  [:map [:stats [:map [:recalls [:vector [:map [:category :string] [:label :string]
-                                          [:lifetime :int] [:recent number?]]]]]]])
-(def ^:private IdOut      [:map [:id :string]])
-(def ^:private DeletedOut [:map [:deleted :string]])
-(def ^:private ErrorOut   [:map [:error :string]])
-;; 409 keeps :configurations so the client can refresh; coercion strips undeclared
-;; keys, so the schema must name every key the body carries.
-(def ^:private Conflict   [:map [:error :string] [:message :string]
-                                 [:configurations [:vector [:map-of :string :string]]]])
-;; The NDJSON recall is a stream, which response coercion cannot check, so the
-;; recall route declares no :responses. This is the JSON fallback shape.
-(def ^:private RecallOut   [:map [:pairs [:vector [:tuple :string :string]]]
-                                [:memories [:vector MemoryOut]]])
-;; A passed batch echoes the new ids in create order plus an applied count. A
-;; rejected batch reports only the failing ops; declare every key an entry can
-;; carry, because response coercion strips the rest.
-(def ^:private BatchOut   [:map [:ids [:vector :string]] [:applied :int]])
-(def ^:private BatchError
-  [:map [:errors [:vector [:map
-                           [:i :int] [:op :string] [:error :string]
-                           [:message {:optional true} :string]
-                           [:configurations {:optional true} [:vector [:map-of :string :string]]]]]]])
-
-;; ---------- middleware ----------
-
-(defn- wrap-user
-  "Require the trusted X-Engram-User header and hold it to the token shape. A
-  missing header is a 401. A malformed user id is a 400, so a space or any other
-  out-of-shape value never reaches a stat key or a recall."
-  [handler]
-  (fn [req]
-    (let [u (get-in req [:headers "x-engram-user"])]
-      (cond
-        (nil? u)                      {:status 401 :body {:error "missing X-Engram-User"}}
-        (not (config/valid-token? u)) {:status 400 :body {:error "malformed X-Engram-User"}}
-        :else                         (handler (assoc req :engram/user u))))))
-
-(defn- wrap-log
-  "Log one info line per request: user, method, path, status, and duration in
-  milliseconds. It logs no memory content and no private data beyond the user id."
-  [handler]
-  (fn [req]
-    (let [start (System/nanoTime)
-          resp  (handler req)
-          ms    (quot (- (System/nanoTime) start) 1000000)]
-      (t/log! {:level :info :id ::request
-               :data {:request-id (get req :engram/request-id "-")
-                      :user       (get-in req [:headers "x-engram-user"] "-")
-                      :method     (name (:request-method req))
-                      :path       (:uri req)
-                      :status     (:status resp)
-                      :ms         ms}}
-              "request")
-      resp)))
-
-(defn- wrap-request-id
-  "Give each request a short-hex correlation id and echo it on every response as
-  the X-Engram-Request-Id header, so a user can quote it."
-  [handler]
-  (fn [req]
-    (let [id   (subs (str (java.util.UUID/randomUUID)) 0 8)
-          resp (handler (assoc req :engram/request-id id))]
-      (assoc-in resp [:headers "X-Engram-Request-Id"] id))))
-
-(defn- log-exception
-  "reitit ::exception/wrap: log a 5xx error with full context, then delegate to
-  the matched handler. A 4xx (a coercion failure) is left to the per-request line."
-  [handler e request]
-  (let [resp (handler e request)]
-    (when (<= 500 (:status resp))
-      (t/log! {:level :error :id ::error :error e
-               :data {:request-id (:engram/request-id request)
-                      :user       (get-in request [:headers "x-engram-user"] "-")
-                      :method     (name (:request-method request))
-                      :path       (:uri request)
-                      :status     (:status resp)
-                      :body       (:body-params request)}}
-              "handler error"))
-    resp))
-
-(defn- error-response
-  "reitit ::exception/default: a 500 that carries the correlation id."
-  [_e request]
-  {:status 500 :body {:error "internal error" :id (:engram/request-id request)}})
-
-(def ^:private exception-mw
-  (exception/create-exception-middleware
-   (assoc exception/default-handlers
-          ::exception/default error-response
-          ::exception/wrap    log-exception)))
 
 (defn- ndjson-response
   "Stream a header line, then one JSON line per memory, without truncation and
@@ -263,27 +124,27 @@
                       :handler (fn [_] {:status 200 :body {:status "ok"}})}}]
    ;; The "" prefix adds no path segment; it groups the child routes so that
    ;; wrap-user gates all of them and leaves /healthz and /swagger.json open.
-   ["" {:middleware [wrap-user]}
-    ["/config" {:get {:responses {200 {:body ConfigOut}}
+   ["" {:middleware [mw/wrap-user]}
+    ["/config" {:get {:responses {200 {:body schema/ConfigOut}}
                       :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
-    ["/stats"  {:get {:responses {200 {:body StatsOut}}
+    ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
                       :handler (fn [req] {:status 200
                                           :body {:stats {:recalls (vec (stats/recalls conn (:engram/user req)
                                                                                       (:half-life-days cfg)))}}})}}]
-    ["/memories"       {:post {:parameters {:body CreateBody}
-                               :responses  {201 {:body IdOut} 409 {:body Conflict}}
+    ["/memories"       {:post {:parameters {:body schema/CreateBody}
+                               :responses  {201 {:body schema/IdOut} 409 {:body schema/Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
-    ["/memories/batch" {:post {:parameters {:body BatchBody}
-                               :responses  {200 {:body BatchOut} 422 {:body BatchError}}
+    ["/memories/batch" {:post {:parameters {:body schema/BatchBody}
+                               :responses  {200 {:body schema/BatchOut} 422 {:body schema/BatchError}}
                                :handler (fn [req] (batch-handler conn cfg req))}}]
-    ;; No :responses: the NDJSON stream cannot be response-coerced (see RecallOut).
-    ["/memories/recall" {:post {:parameters {:body RecallBody}
+    ;; No :responses: the NDJSON stream cannot be response-coerced (see schema/RecallOut).
+    ["/memories/recall" {:post {:parameters {:body schema/RecallBody}
                                 :handler (fn [req] (recall-handler conn writer req))}}]
-    ["/memories/:id"   {:put    {:parameters {:path [:map [:id IdStr]] :body UpdateBody}
-                                 :responses  {200 {:body IdOut} 404 {:body ErrorOut} 409 {:body Conflict}}
+    ["/memories/:id"   {:put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/UpdateBody}
+                                 :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut} 409 {:body schema/Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
-                        :delete {:parameters {:path [:map [:id IdStr]]}
-                                 :responses {200 {:body DeletedOut} 404 {:body ErrorOut}}
+                        :delete {:parameters {:path [:map [:id schema/IdStr]]}
+                                 :responses {200 {:body schema/DeletedOut} 404 {:body schema/ErrorOut}}
                                  :handler (fn [req] (delete-handler conn req))}}]]])
 
 (defn app
@@ -298,11 +159,11 @@
                 :muuntaja   mc/instance
                 :middleware [parameters/parameters-middleware
                              muuntaja/format-middleware
-                             exception-mw
+                             mw/exception-mw
                              rrc/coerce-response-middleware
                              rrc/coerce-request-middleware]}})
        (ring/routes
         (swagger-ui/create-swagger-ui-handler {:path "/api-docs" :url "/swagger.json"})
         (ring/create-default-handler)))
-      wrap-log
-      wrap-request-id))
+      mw/wrap-log
+      mw/wrap-request-id))
