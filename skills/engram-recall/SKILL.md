@@ -70,7 +70,7 @@ Rules:
 - One fact states one thing. If a fact needs a list, write one fact per item.
 - `src` is the source identity. Atomic facts split from one source share a src.
 - `related` links to other memories by their `src`. The server follows these
-  links transitively on a fetch.
+  links transitively on a recall.
 - Labels, `src`, and each `related` value must be lowercase kebab-case tokens: a
   lowercase letter, then lowercase letters, digits, or hyphens. A leading digit,
   uppercase, a dot, and a plus are rejected. Do not create near-duplicate labels,

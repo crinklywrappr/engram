@@ -2,13 +2,13 @@
 ;;
 ;; A memory is one atomic fact owned by a user. Its category:label pairs are
 ;; stored as component tag entities so datalog can match a pair and stats can
-;; group by it. `related` holds the src values this fact links to; the query
+;; group by it. `related` holds the src values this fact links to; the recall
 ;; walks that graph transitively. `content` is full-text indexed so a future
 ;; search feature can use it (not on the recall path).
 ;;
-;; A stat row counts, per (user, category, label), how often a pair was fetched:
+;; A stat row counts, per (user, category, label), how often a pair was recalled:
 ;; a monotonic lifetime count and an exponential-decay recent count. The
-;; composite tuple :stat/user+category+label is a unique identity, so a fetch
+;; composite tuple :stat/user+category+label is a unique identity, so a recall
 ;; upserts the row. There is no delimiter, so no user id can collide two rows.
 ;;
 ;; syncopate additive creation migration: :down is auto-derived.

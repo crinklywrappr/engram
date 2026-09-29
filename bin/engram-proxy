@@ -8,10 +8,10 @@
 ;;
 ;; The client speaks one request per SSH connection:
 ;;
-;;   ssh engram POST /memories/query < body.json      (POST/PUT: body on stdin)
-;;   ssh engram GET  /config        < /dev/null       (GET: empty stdin)
+;;   ssh engram POST /memories/recall < body.json     (POST/PUT: body on stdin)
+;;   ssh engram GET  /config         < /dev/null      (GET: empty stdin)
 ;;
-;; sshd puts "POST /memories/query" in SSH_ORIGINAL_COMMAND. This script adds the
+;; sshd puts "POST /memories/recall" in SSH_ORIGINAL_COMMAND. This script adds the
 ;; trusted X-Engram-User header (the user can never set it themselves) and calls
 ;; the server on localhost. The response body streams to stdout; the HTTP status
 ;; goes to stderr as "HTTP <code>"; the exit code is 0 for 2xx and 1 otherwise,
@@ -39,7 +39,7 @@
           resp @(http/request
                  {:url     (str "http://127.0.0.1:" port path)
                   :method  (keyword (str/lower-case method))
-                  ;; Always ask for NDJSON: the fetch route streams it (constant
+                  ;; Always ask for NDJSON: the recall route streams it (constant
                   ;; server memory); /config and /stats have no NDJSON encoder, so
                   ;; muuntaja falls back to JSON for them.
                   :headers (cond-> {"X-Engram-User" user
