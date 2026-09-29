@@ -34,7 +34,7 @@ from one source share a src, and relations point at it.
 _Avoid_: source-id, origin
 
 **related**:
-The set of other memories a fact links to, named by their src. A fetch follows
+The set of other memories a fact links to, named by their src. A recall follows
 these links across hops.
 _Avoid_: links, references
 
@@ -55,7 +55,7 @@ _Avoid_: account, tenant, client
 **Recall**:
 The act of asking for memories by their category:label pairs. A recall returns
 the matching memories and the memories they link to across hops.
-_Avoid_: query, request
+_Avoid_: query, request, fetch
 
 **Recall count**:
 How often a category:label pair was recalled. engram keeps it as a lifetime

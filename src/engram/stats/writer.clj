@@ -62,11 +62,32 @@
 (defn writer
   "Create the stat-write consumer with a debounced flush. Its agent value holds
   the pending recalls keyed by [user category label], the scheduled flush, and
-  the window start. Each recall reschedules a one-shot flush a `debounce-ms`
-  later, capped by `max-wait-ms` so a sustained burst still flushes. The agent
-  dispatches through a single-thread daemon executor it owns, so engram never
-  uses the shared agent pools. The :continue error mode keeps the agent usable
-  after a failed action."
+  the window start.
+
+  Tuning:
+  - `half-life-days` is the decay half-life in days, from the admin config.
+  - `debounce-ms` defaults to 200. Each recall reschedules a one-shot flush this
+    many milliseconds later.
+  - `max-wait-ms` defaults to 2000. A sustained burst still flushes within this
+    cap.
+
+  Guarantees:
+  - One serial consumer applies every action in order, so no increment is lost.
+  - A debounced flush coalesces a burst into one transaction.
+  - The agent dispatches through a single-thread daemon executor it owns, so
+    engram uses daemon threads only and the JVM exits without shutdown-agents.
+  - The :continue error mode keeps the agent usable after a failed action.
+
+  The returned map holds:
+  - `:agent` serializes the work. Its value holds the pending recalls, the
+    scheduled flush, and the window start.
+  - `:conn` is the Datalevin connection each flush writes to.
+  - `:half-life` is the decay half-life in days, from the admin config.
+  - `:consumer` is the single-thread daemon executor that applies every action.
+  - `:scheduler` is the single-thread daemon executor that fires the flush.
+  - `:closed?` prevents writes during shutdown. `drain!` sets it, and it turns `record!` into a no-op.
+  - `:debounce-ms` is the debounce delay in milliseconds.
+  - `:max-wait-ms` is the cap on debounce postponement in milliseconds."
   [conn half-life-days & {:keys [debounce-ms max-wait-ms]
                           :or   {debounce-ms 200 max-wait-ms 2000}}]
   (letfn [(daemon [nm] (reify ThreadFactory
