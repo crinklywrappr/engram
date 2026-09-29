@@ -51,8 +51,7 @@
   [:map
    [:id :string] [:content :string] [:src :string]
    [:related [:vector :string]]
-   [:tags [:vector [:tuple :string :string]]]
-   [:created-at [:maybe :string]] [:updated-at [:maybe :string]]])
+   [:tags [:vector [:tuple :string :string]]]])
 
 (def ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
 ;; /stats nests the recall rows under :stats then :recalls, so a later stat type

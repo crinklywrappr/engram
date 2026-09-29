@@ -571,7 +571,7 @@
           (is (vector? (:memories body))))
         (testing "each memory carries the wire keys, and an empty related is omitted"
           (let [m (first (:memories body))]
-            (is (= #{:id :content :src :tags :created-at :updated-at}
+            (is (= #{:id :content :src :tags}
                    (set (keys m))))
             (is (not (contains? m :related))))))
       (finally (d/close conn)))))

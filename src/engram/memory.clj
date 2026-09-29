@@ -13,25 +13,20 @@
 
 (def ^:private pull-pattern
   '[:memory/id :memory/content :memory/src :memory/related
-    :memory/created-at :memory/updated-at
     {:memory/tag [:tag/category :tag/label]}])
 
 (defn- ->wire
-  "Shape a pulled memory into the JSON wire form (dates as strings). Omit an
-  empty tags vector, an empty related vector, and a nil timestamp, so a bare
-  memory carries no empty or null key on the recall wire."
+  "Shape a pulled memory into the JSON wire form. Omit an empty tags vector and
+  an empty related vector, so a bare memory carries no empty key on the recall
+  wire. The recall path carries no timestamps."
   [m]
   (let [related (vec (:memory/related m))
-        tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))
-        created (some-> ^Date (:memory/created-at m) .toInstant str)
-        updated (some-> ^Date (:memory/updated-at m) .toInstant str)]
+        tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))]
     (cond-> {:id      (str (:memory/id m))
              :content (:memory/content m)
              :src     (:memory/src m)}
       (seq tags)    (assoc :tags tags)
-      (seq related) (assoc :related related)
-      created       (assoc :created-at created)
-      updated       (assoc :updated-at updated))))
+      (seq related) (assoc :related related))))
 
 (defn- tag-tx [[category label]] {:tag/category category :tag/label label})
 
