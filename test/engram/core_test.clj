@@ -47,6 +47,22 @@
     (doseq [s ["Clojure" "node.js" "c++" "a_b" "a/b" "-x" "x-" "a--b" "3d" "a b"]]
       (is (not (m/validate config/Token s)) s))))
 
+(deftest load-config-resolves-env
+  (testing "with ENGRAM_CONFIG unset, load-config reads default-path"
+    (with-redefs-fn {#'config/getenv (constantly nil)}
+      (fn []
+        (is (= 14 (:half-life-days
+                   (config/load-config "deploy/engram-config.example.edn")))))))
+  (testing "with ENGRAM_CONFIG set, load-config reads that path over default-path"
+    (let [tmp (java.io.File/createTempFile "engram-cfg" ".edn")]
+      (try
+        (spit tmp (pr-str {:half-life-days 99 :configurations [{"domain" "+"}]}))
+        (with-redefs-fn {#'config/getenv (fn [k] (when (= k "ENGRAM_CONFIG") (.getPath tmp)))}
+          (fn []
+            (is (= 99 (:half-life-days
+                       (config/load-config "deploy/engram-config.example.edn"))))))
+        (finally (.delete tmp))))))
+
 ;; ---------- memory: create, transitive recall, isolation ----------
 
 (deftest transitive-recall-and-isolation

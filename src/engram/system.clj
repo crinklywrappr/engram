@@ -31,7 +31,7 @@
   (try (d/close conn) (catch Exception _)))
 
 (defmethod ig/init-key :engram.config/config [_ {:keys [path]}]
-  (let [c (config/load-config (or (System/getenv "ENGRAM_CONFIG") path))]
+  (let [c (config/load-config path)]
     (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defmethod ig/init-key :engram.stats/writer [_ {:keys [conn config]}]

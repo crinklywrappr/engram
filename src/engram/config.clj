@@ -27,10 +27,15 @@
   [s]
   (m/validate Token s))
 
+(defn- getenv
+  "Indirection over `System/getenv` so a test can stub the environment."
+  [k]
+  (System/getenv k))
+
 (defn load-config
-  "Read the config map {:half-life-days n :configurations [{cat card} ...]}."
-  [path]
-  (edn/read-string (slurp path)))
+  "Load the config map {:half-life-days n :configurations [{cat card} ...]}."
+  [default-path]
+  (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path))))
 
 (defn- cardinality->vector [card]
   (case card
