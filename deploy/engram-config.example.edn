@@ -10,7 +10,25 @@
 ;; src (exactly one) and related (zero or more) are imposed by the server and
 ;; must NOT appear here.
 ;;
+;; :categories is optional. Each entry describes one category for the client. A
+;; description is at most 256 characters. Each example is a lowercase kebab-case
+;; token. A described category must appear in a configuration below. The server
+;; returns this map on GET /config so the client picks fitting labels.
+;;
 ;; The categories below are seeded from the user-level CLAUDE.md tag vocabulary.
 {:half-life-days 14
+ :categories
+ {"scope"    {:description "cross-project or project-specific reach of the fact"
+              :examples ["global" "project"]}
+  "domain"   {:description "the broad subject area"
+              :examples ["clojure" "databases" "git-workflow"]}
+  "project"  {:description "the project slug the fact belongs to"
+              :examples ["engram" "commensura"]}
+  "tech"     {:description "a specific tool, library, or artifact"
+              :examples ["datalevin" "reitit" "malli"]}
+  "activity" {:description "what the fact is about doing"
+              :examples ["debugging" "design" "review"]}
+  "status"   {:description "a life-cycle state, when one applies"
+              :examples ["shipped" "deferred" "resolved"]}}
  :configurations
  [{"scope" "?" "domain" "+" "project" "*" "tech" "*" "activity" "*" "status" "?"}]}

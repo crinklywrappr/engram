@@ -45,6 +45,10 @@ Run `ssh engram GET /config` one time per session. It returns
 cardinality (`1`, `?`, `*`, `+`). A memory you write must satisfy one
 configuration. Keep this in mind for the rest of the session.
 
+When the admin describes the categories, the body also carries a `categories`
+map. Each entry gives one category a `description` and a vector of `examples`.
+Read them to pick labels that match how the admin means each category.
+
 ## Recall: two calls
 
 1. `ssh engram GET /stats` returns your recall counts. The body is

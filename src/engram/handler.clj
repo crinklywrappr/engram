@@ -133,7 +133,10 @@
    ;; wrap-user gates all of them and leaves /healthz and /swagger.json open.
    ["" {:middleware [mw/wrap-user]}
     ["/config" {:get {:responses {200 {:body schema/ConfigOut}}
-                      :handler (fn [_] {:status 200 :body {:configurations (:configurations cfg)}})}}]
+                      :handler (fn [_]
+                                 {:status 200
+                                  :body (cond-> {:configurations (:configurations cfg)}
+                                          (:categories cfg) (assoc :categories (:categories cfg)))})}}]
     ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
                       :handler (fn [req] (stats-handler conn cfg req))}}]
     ["/memories"       {:post {:parameters {:body schema/CreateBody}

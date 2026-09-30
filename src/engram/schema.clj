@@ -53,7 +53,16 @@
    [:related [:vector :string]]
    [:tags [:vector [:tuple :string :string]]]])
 
-(def ConfigOut  [:map [:configurations [:vector [:map-of :string :string]]]])
+;; /config carries the configurations and, when the admin describes them, the
+;; optional :categories map. Response coercion strips undeclared keys, so both
+;; are named here.
+(def ConfigOut
+  [:map
+   [:configurations [:vector [:map-of :string :string]]]
+   [:categories {:optional true}
+    [:map-of :string [:map
+                      [:description {:optional true} :string]
+                      [:examples {:optional true} [:vector :string]]]]]])
 ;; /stats nests the recall rows under :stats then :recalls, so a later stat type
 ;; can sit beside recalls without breaking the envelope. Each row is a positional
 ;; tuple [category label lifetime recent], matching the positional pair the recall

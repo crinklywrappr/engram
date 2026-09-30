@@ -63,6 +63,25 @@
                        (config/load-config "deploy/engram-config.example.edn"))))))
         (finally (.delete tmp))))))
 
+(deftest config-categories-validation
+  (let [base {:half-life-days 14
+              :configurations [{"domain" "+" "scope" "?"}]}]
+    (testing "a config with no :categories is returned unchanged"
+      (is (= base (config/validate-config base))))
+    (testing "a valid :categories map is accepted"
+      (let [c (assoc base :categories {"domain" {:description "broad subject"
+                                                 :examples ["clojure" "databases"]}})]
+        (is (= c (config/validate-config c)))))
+    (testing "a description over 256 characters is rejected"
+      (let [c (assoc base :categories {"domain" {:description (apply str (repeat 257 "x"))}})]
+        (is (thrown? clojure.lang.ExceptionInfo (config/validate-config c)))))
+    (testing "a non-token example is rejected"
+      (let [c (assoc base :categories {"domain" {:examples ["Clojure"]}})]
+        (is (thrown? clojure.lang.ExceptionInfo (config/validate-config c)))))
+    (testing "a described category absent from the configurations is rejected"
+      (let [c (assoc base :categories {"framework" {:description "web stack"}})]
+        (is (thrown? clojure.lang.ExceptionInfo (config/validate-config c)))))))
+
 ;; ---------- memory: create, transitive recall, isolation ----------
 
 (deftest transitive-recall-and-isolation
@@ -427,8 +446,14 @@
           (is (= 409 (:status resp)))
           (is (= "no-configuration" (:error body)))
           (is (some? (:configurations body)))))
-      (testing "GET /config returns the configurations"
-        (is (= 200 (:status (request app :get "/config" {:user "alice" :accept "application/json"})))))
+      (testing "GET /config returns the configurations and the category descriptions"
+        (let [resp (request app :get "/config" {:user "alice" :accept "application/json"})
+              body (body-json resp)]
+          (is (= 200 (:status resp)))
+          (is (some? (:configurations body)))
+          (is (map? (:categories body)))
+          (is (= "the broad subject area" (get-in body [:categories :domain :description])))
+          (is (some #{"clojure"} (get-in body [:categories :domain :examples])))))
       (testing "the recall call streams NDJSON when asked"
         (let [resp  (request app :post "/memories/recall"
                              {:user "alice" :accept "application/x-ndjson"

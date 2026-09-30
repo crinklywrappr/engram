@@ -20,6 +20,16 @@
 (def Token [:re token-regex])
 (def Pair [:tuple Token Token])                 ; a [category label] pair
 
+;; An admin may describe each category. The :categories map is optional. Each
+;; entry gives one category an optional description (<=256 chars) and an optional
+;; vector of token examples. Descriptions and examples flow to the client on
+;; GET /config, so it can pick labels that fit how the admin means each category.
+(def Categories
+  [:map-of Token
+   [:map
+    [:description {:optional true} [:string {:max 256}]]
+    [:examples {:optional true} [:vector Token]]]])
+
 (defn valid-token?
   "True when `s` is a lowercase kebab-case token. The user id is held to this
   shape at the request boundary, so it can never contain a space or a control
@@ -32,10 +42,31 @@
   [k]
   (System/getenv k))
 
+(defn- configured-categories
+  "The set of category names that appear across the configurations."
+  [config]
+  (into #{} (mapcat keys) (:configurations config)))
+
+(defn validate-config
+  "Return `config` when valid, else throw. The :categories map is optional. When
+  present, it must match the Categories shape, and every described category must
+  appear in some configuration, because describing an unused category is a
+  mistake."
+  [config]
+  (when-let [cats (:categories config)]
+    (when-not (m/validate Categories cats)
+      (throw (ex-info "config :categories is malformed"
+                      {:errors (m/explain Categories cats)})))
+    (let [unknown (remove (configured-categories config) (keys cats))]
+      (when (seq unknown)
+        (throw (ex-info "config :categories names categories absent from :configurations"
+                        {:unknown (vec unknown)})))))
+  config)
+
 (defn load-config
   "Load the config map {:half-life-days n :configurations [{cat card} ...]}."
   [default-path]
-  (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path))))
+  (validate-config (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path)))))
 
 (defn- cardinality->vector [card]
   (case card
