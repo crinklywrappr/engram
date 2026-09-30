@@ -17,7 +17,8 @@ if [ -f /home/engram/.ssh/authorized_keys ]; then
 fi
 
 # The server writes LMDB under /data (owned by engram). Run it as engram.
-su engram -s /bin/bash -c "java ${JAVA_OPTS} -jar /app/engram.jar" &
+# su resets PATH and drops the JDK bin, so call java by its absolute path.
+su engram -s /bin/bash -c "${JAVA_HOME}/bin/java ${JAVA_OPTS} -jar /app/engram.jar" &
 
 # sshd in the foreground is PID 1's child; -e logs to stderr.
 exec /usr/sbin/sshd -D -e

@@ -2,7 +2,7 @@
 # The uberjar is built ahead of this image, on the runner, and copied in. The jar
 # is architecture-neutral, so one build serves both platforms. Only babashka and
 # the base JRE differ per architecture.
-FROM eclipse-temurin:21-jre-bookworm
+FROM eclipse-temurin:21-jre-noble
 ARG BABASHKA_VERSION=1.12.196
 # buildx sets TARGETARCH to amd64 or arm64. babashka names arm64 as aarch64.
 ARG TARGETARCH
