@@ -3,7 +3,7 @@
   (:require [clojure.tools.build.api :as b]))
 
 (def lib 'com.github.crinklywrappr/engram)
-(def version "0.1.0-SNAPSHOT")
+(def version (format "1.0.%s" (b/git-count-revs nil)))
 (def main 'engram.main)
 (def class-dir "target/classes")
 (def uber-file (format "target/engram-%s-standalone.jar" version))
@@ -33,8 +33,7 @@
          :java-opts datalevin-opts
          :ns-compile [main]))
 
-(defn ci "Run the CI pipeline of tests (and build the uberjar)." [opts]
-  (test opts)
+(defn uber "Build the uberjar. Does not run the tests." [opts]
   (b/delete {:path "target"})
   (let [opts (uber-opts opts)]
     (println "\nCopying source...")
@@ -44,3 +43,7 @@
     (println "\nBuilding JAR..." (:uber-file opts))
     (b/uber opts))
   opts)
+
+(defn ci "Run the tests, then build the uberjar." [opts]
+  (test opts)
+  (uber opts))
