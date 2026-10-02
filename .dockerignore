@@ -2,6 +2,5 @@
 target
 !target/engram-*-standalone.jar
 data
-backups
 /tmp
 .cpcache

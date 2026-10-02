@@ -10,7 +10,6 @@ services:
       - engram-data:/data
       - ./deploy/engram-config.example.edn:/config/engram-config.edn:ro
       - ./deploy/authorized_keys:/home/engram/.ssh/authorized_keys:ro
-      - ./backups:/backups
     restart: unless-stopped
 
 volumes:

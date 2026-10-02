@@ -3,7 +3,7 @@
 engram is a self-hosted, per-user memory server. A memory is one atomic fact
 tagged with `category:label` pairs. The server stores facts in Datalevin and
 serves them over a small REST API. Claude reaches the API through a skill that
-talks over SSH, so no secret ever lands in a settings file.
+talks over SSH, so no secret ever lands in a configuration file.
 
 ## Design
 
@@ -54,9 +54,6 @@ Before starting, do two things:
 2. Create `deploy/authorized_keys` from `deploy/authorized_keys.example`. Add one
    line per trusted user. Every line must start with
    `command="engram-proxy --user <id>"`.
-
-Back up the data directory with `deploy/backup.sh` from cron. See the comments in
-that file for a cron line.
 
 ## Use from Claude
 
