@@ -22,8 +22,8 @@ RUN apt-get update \
 
 COPY target/engram-*-standalone.jar /app/engram.jar
 COPY bin/engram-proxy /usr/local/bin/engram-proxy
-COPY deploy/sshd_config /etc/ssh/sshd_config.d/engram.conf
-COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY build/sshd_config /etc/ssh/sshd_config.d/engram.conf
+COPY build/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/engram-proxy /usr/local/bin/entrypoint.sh
 
 ENV ENGRAM_DATA_DIR=/data/engram \
