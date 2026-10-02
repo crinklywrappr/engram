@@ -17,15 +17,14 @@ RUN apt-get update \
  && curl -sL "https://github.com/babashka/babashka/releases/download/v${BABASHKA_VERSION}/babashka-${BABASHKA_VERSION}-linux-${BB_ARCH}-static.tar.gz" \
       | tar -xz -C /usr/local/bin \
  && useradd -m -d /home/engram -s /bin/bash engram \
- && mkdir -p /home/engram/.ssh /data /config /backups /run/sshd \
- && chown -R engram:engram /home/engram /data /backups
+ && mkdir -p /home/engram/.ssh /data /config /run/sshd \
+ && chown -R engram:engram /home/engram /data
 
 COPY target/engram-*-standalone.jar /app/engram.jar
 COPY bin/engram-proxy /usr/local/bin/engram-proxy
-COPY deploy/backup.sh /usr/local/bin/engram-backup
 COPY deploy/sshd_config /etc/ssh/sshd_config.d/engram.conf
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/engram-proxy /usr/local/bin/engram-backup /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/engram-proxy /usr/local/bin/entrypoint.sh
 
 ENV ENGRAM_DATA_DIR=/data/engram \
     ENGRAM_CONFIG=/config/engram-config.edn \

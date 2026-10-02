@@ -28,7 +28,6 @@ ExecStart=/usr/bin/docker run --rm --name engram \
   -v /srv/engram/data:/data \
   -v /srv/engram/config:/config:ro \
   -v /srv/engram/authorized_keys:/home/engram/.ssh/authorized_keys:ro \
-  -v /srv/engram/backups:/backups \
   ghcr.io/crinklywrappr/engram:latest
 
 ExecStop=/usr/bin/docker stop engram

@@ -18,8 +18,8 @@ fi
 
 # The server runs as engram and writes LMDB under /data. A bind mount arrives
 # with the owner it had on the host, so take ownership here, while this entrypoint
-# is still root. This removes any host-side uid requirement for the mounts.
-chown -R engram:engram /data /backups || true
+# is still root. This removes any host-side uid requirement for the mount.
+chown -R engram:engram /data || true
 
 # The server writes LMDB under /data (owned by engram). Run it as engram.
 # su resets PATH and drops the JDK bin, so call java by its absolute path.
