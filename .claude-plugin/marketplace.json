@@ -1,0 +1,30 @@
+{
+  "name": "engram",
+  "owner": {
+    "name": "crinklywrappr",
+    "url": "https://github.com/crinklywrappr"
+  },
+  "description": "The engram memory skills for Claude Code.",
+  "plugins": [
+    {
+      "name": "engram",
+      "source": "./",
+      "displayName": "engram",
+      "description": "Recall and store durable per-user memory in engram over SSH, and migrate old markdown memory files.",
+      "version": "1.0.0",
+      "author": {
+        "name": "crinklywrappr"
+      },
+      "homepage": "https://github.com/crinklywrappr/engram",
+      "repository": "https://github.com/crinklywrappr/engram",
+      "license": "EPL-2.0",
+      "keywords": [
+        "memory",
+        "clojure",
+        "datalevin",
+        "ssh",
+        "claude-code"
+      ]
+    }
+  ]
+}
