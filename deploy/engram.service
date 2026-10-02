@@ -1,36 +1,29 @@
 [Unit]
 Description=engram memory server (per-user Datalevin memory over SSH)
 Documentation=https://github.com/crinklywrappr/engram
-Wants=network-online.target
-After=network-online.target docker.service
+After=docker.service
 Requires=docker.service
 
 [Service]
-# systemd runs "docker run" in the foreground and tracks that process. No -d.
+TimeoutStartSec=0
 Restart=always
-RestartSec=10
-TimeoutStartSec=60
-TimeoutStopSec=30
 
-# Remove a stale container left by a hard stop, then start a fresh one.
-ExecStartPre=-/usr/bin/docker rm -f engram
+# Clear any container left by a hard stop, pull the latest image, then run.
+# The pull on every start matches the other services on this host, so a reboot
+# or a restart rolls out the newest published image.
+ExecStartPre=-/usr/bin/docker stop %p
+ExecStartPre=-/usr/bin/docker rm %p
+ExecStartPre=/usr/bin/docker pull ghcr.io/crinklywrappr/engram:latest
 
-# --pull=never keeps delivery manual. The unit never rolls out a new image by
-# itself, not even after a reboot. To upgrade, pull by hand and restart:
-#   docker pull ghcr.io/crinklywrappr/engram:latest
-#   systemctl restart engram
 # Host 2222 publishes the container sshd on port 22. Clients reach the REST API
 # through engram-proxy, which sshd runs as a forced command per authorized_keys
 # line. Only this port is exposed.
-ExecStart=/usr/bin/docker run --rm --name engram \
-  --pull=never \
+ExecStart=/usr/bin/docker run --rm --name %p \
   -p 2222:22 \
   -v /srv/engram/data:/data \
   -v /srv/engram/config:/config:ro \
   -v /srv/engram/authorized_keys:/home/engram/.ssh/authorized_keys:ro \
   ghcr.io/crinklywrappr/engram:latest
-
-ExecStop=/usr/bin/docker stop engram
 
 [Install]
 WantedBy=multi-user.target
