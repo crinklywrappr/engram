@@ -59,6 +59,9 @@ Read them to pick labels that match how the admin means each category.
    the matching memories plus every memory linked to them through `related`,
    followed transitively. Read every line after the header line.
 
+Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
+`related` appear too.
+
 ## Store a fact
 
 `POST /memories` with a JSON body:
@@ -74,13 +77,16 @@ Rules:
 
 - One fact states one thing. If a fact needs a list, write one fact per item.
 - `src` is the source identity. Atomic facts split from one source share a src.
+- `src` is analogous to the filename you would assign to markdown memories.
 - `related` links to other memories by their `src`. The server follows these
   links transitively on a recall.
 - Labels, `src`, and each `related` value must be lowercase kebab-case tokens: a
   lowercase letter, then lowercase letters, digits, or hyphens. A leading digit,
   uppercase, a dot, and a plus are rejected. Do not create near-duplicate labels,
   for example `cost-analysis` and `my-cost-analysis`. Reuse an existing label.
-- Categories are closed to the configuration. `src` and `related` are not categories.
+- Categories are closed to the configuration. `src` and `related` are not
+  categories. The server always requires exactly one `src` and allows zero or more
+  `related`, apart from the configuration.
 
 engram keeps no history. To correct a fact, edit it in place with
 `PUT /memories/<id>` using the same body shape without `src`. To remove a fact,
@@ -120,5 +126,6 @@ does, the server rejects the batch.
 ## When a write returns 409
 
 A `POST` or `PUT` that does not match the configuration returns exit code 1 with
-`HTTP 409` on stderr. The stdout body contains `{"configurations": [...]}`.
-Replace your cached configuration with it, fix the tags, and retry.
+`HTTP 409` on stderr. The stdout body contains `{"error", "message",
+"configurations"}`. Replace your cached configuration from the `configurations`
+value, fix the tags, and retry.

@@ -23,7 +23,7 @@ Add this block to your `~/.ssh/config`, so `ssh engram` resolves:
 ```
 Host engram
     HostName your-server-host
-    Port 2222
+    Port your-server-port
     User engram
     IdentityFile ~/.ssh/your_engram_key
     ControlMaster auto
@@ -32,7 +32,7 @@ Host engram
 ```
 
 The login user is always `engram`, the one account on the server. Your memory
-identity comes from the `--user` value in the forced command, not from this login
+identity comes from the `--user` value provided by the admin, not from this login
 name.
 
 The `Control` settings reuse one SSH connection. The first `ssh engram` call opens
@@ -56,10 +56,10 @@ Confirm that the `engram-recall` and `migrate` skills load in a new session.
 Run one call to confirm the server answers:
 
 ```bash
-ssh engram GET /config </dev/null
+ssh engram GET /config < /dev/null
 ```
 
-A `200` means the connection works. The `</dev/null` matters. The proxy on the
+A `200` means the connection works. The `< /dev/null` matters. The proxy on the
 server reads a request body from standard input. A bodyless call like `GET` needs
 empty input, or the call waits for input and looks stuck.
 
