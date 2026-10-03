@@ -16,8 +16,14 @@ build a preview, then apply it after the user approves.
 
 - A project memory directory with a `MEMORY.md` index and per-fact markdown
   files. Each file has frontmatter (`name`, `description`, `metadata.type`).
-- The engram configuration: run `ssh engram GET /config` first to learn the closed set
-  of categories and their cardinalities.
+- The engram configuration: run `ssh engram GET /config < /dev/null` first to learn
+  the closed set of categories and their cardinalities.
+- The labels already in use: run `ssh engram GET /stats < /dev/null` next. The body
+  is `{"stats": {"recalls": [ ... ]}}`, and each entry is a positional row
+  `[category, label, count, lifetime, recent]`. Read the category and label of
+  every row to learn the vocabulary your memories already carry. Reuse these
+  labels during the migration, so you do not add a near-duplicate of a label that
+  already exists.
 
 ## Phase 1: distill and preview (dry run)
 
@@ -42,7 +48,18 @@ Once the user approves the preview:
 
 1. Send every fact in one batch. `POST /memories/batch` with a body
    `{"create": [ fact, fact, ... ]}`, one entry per distilled fact. Do not send a
-   call per fact.
+   call per fact. Each `fact` is the same shape as a single `POST /memories` body:
+
+   ```json
+   {"content": "one fact stated plainly",
+    "src": "source-file-name",
+    "tags": [["domain","clojure"],["tech","datalevin"]],
+    "related": ["another-src"]}
+   ```
+
+   `content` is the one fact. `src` is the source file name in kebab-case without
+   the extension. `tags` is a list of `[category, label]` pairs. `related` is a
+   list of other `src` values this fact links to, and it is optional.
 2. Read the result. On `HTTP 200` the body is `{"ids":[...],"applied":n}`, and the
    migration is done. On `HTTP 422` the body is `{"errors":[...]}`, one entry per
    bad fact, each with its index `i` in the create list. Nothing was written,
