@@ -651,3 +651,13 @@
             (is (some? (:id body)))
             (is (= (:id body) (get-in resp [:headers "X-Engram-Request-Id"]))))))
       (finally (d/close conn)))))
+
+(deftest healthz-reports-the-version
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (testing "/healthz returns the build version, dev in a source tree"
+        (let [body (body-json (request app :get "/healthz" {:accept "application/json"}))]
+          (is (= "ok" (:status body)))
+          (is (= "dev" (:version body)))))
+      (finally (d/close conn)))))

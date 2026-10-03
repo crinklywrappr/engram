@@ -40,6 +40,22 @@ seccomp profile. The modern JVM uses the `clone3` syscall. An old profile reject
 it, and the JVM fails to start a thread. The clean alternative is Docker 20.10.10
 or later, whose default profile allows `clone3`.
 
+## The running version
+
+The server reports its version two ways. The first runs over the SSH proxy from
+a client whose key the admin added. The GET carries no body, so close stdin:
+
+```bash
+ssh engram GET /healthz </dev/null
+```
+
+The response body carries a `version` field, such as `1.0.42`. The second reads
+the image label on the host:
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' ghcr.io/crinklywrappr/engram:latest
+```
+
 ## The configuration file
 
 The admin writes the configuration file and mounts it. The repo ships a sample at
@@ -116,8 +132,8 @@ with mode 600.
 
 engram does not manage backups. An admin who wants backups runs a host cron job.
 
-Back up the data directory behind the `/data` mount. The LMDB database lives under
-it, at `/data/engram` inside the container. On the host, back up the directory you
+Back up the data directory behind the `/data` mount. The LMDB database lives at
+`/data` inside the container. On the host, back up the directory you
 mounted at `/data`. The configuration file and the `authorized_keys` file are
 plain text the admin already keeps. A backup of the data directory is enough for
 the memories.

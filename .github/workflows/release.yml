@@ -110,6 +110,7 @@ jobs:
             ghcr.io/crinklywrappr/engram:latest
           labels: |
             org.opencontainers.image.source=https://github.com/crinklywrappr/engram
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

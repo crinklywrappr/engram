@@ -40,6 +40,17 @@ When you start your own JVM, add these flags:
 `build.clj` derives the version as `1.0.<commit-count>` from the git revision
 count, and the uberjar name carries it. Do not hand-edit a version.
 
+The build stages the version for the runtime. `build.clj` writes a map to
+`resources/engram/build-info.edn` inside the uberjar, and the `engram.build-info`
+namespace reads it back. A source tree that was not built through `build.clj`
+reads the checked-in placeholder `dev`. When the build learns a fact the runtime
+wants, such as a git sha, add a key to that map.
+
+The running server reports the version in three places. The `GET /healthz` body
+carries a `version` field. The Swagger page at `/api-docs` shows the version in
+its title block. The release workflow sets the
+`org.opencontainers.image.version` label on the image.
+
 ## The Docker image release
 
 The image build and push to GHCR runs only on a manual trigger. The workflow is

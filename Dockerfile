@@ -26,7 +26,7 @@ COPY build/sshd_config /etc/ssh/sshd_config.d/engram.conf
 COPY build/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/engram-proxy /usr/local/bin/entrypoint.sh
 
-ENV ENGRAM_DATA_DIR=/data/engram \
+ENV ENGRAM_DATA_DIR=/data \
     ENGRAM_CONFIG=/config/engram-config.edn \
     ENGRAM_PORT=8080 \
     PORT=8080 \

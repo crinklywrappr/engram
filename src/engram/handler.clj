@@ -11,6 +11,7 @@
   `app` entry point."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [engram.build-info :as build-info]
             [engram.config :as config]
             [engram.errors :as errors]
             [engram.memory :as memory]
@@ -124,11 +125,11 @@
   [conn cfg writer]
   [["/swagger.json"
     {:get {:no-doc true
-           :swagger {:info {:title "engram" :version "0.1.0"
+           :swagger {:info {:title "engram" :version build-info/version
                             :description "Per-user atomic-fact memory server."}}
            :handler (swagger/create-swagger-handler)}}]
-   ["/healthz" {:get {:responses {200 {:body [:map [:status :string]]}}
-                      :handler (fn [_] {:status 200 :body {:status "ok"}})}}]
+   ["/healthz" {:get {:responses {200 {:body [:map [:status :string] [:version :string]]}}
+                      :handler (fn [_] {:status 200 :body {:status "ok" :version build-info/version}})}}]
    ;; The "" prefix adds no path segment; it groups the child routes so that
    ;; wrap-user gates all of them and leaves /healthz and /swagger.json open.
    ["" {:middleware [mw/wrap-user]}
