@@ -1,0 +1,46 @@
+name: Publish the skills plugin
+
+# The engram repo owns the skills. This workflow mirrors the plugin/ directory to
+# the thin crinklywrappr/engram-skills repo, which serves as the Claude plugin
+# marketplace. A marketplace add then clones only the plugin, not the whole project.
+#
+# The default GITHUB_TOKEN reaches only the engram repo, so the push to the thin
+# repo needs a separate credential. Store a PAT with write access to engram-skills
+# as the repository secret ENGRAM_SKILLS_TOKEN. The engram-skills repo needs an
+# initial commit on main before the first run.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'plugin/**'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out engram
+        uses: actions/checkout@v4
+
+      - name: Check out the thin skills repo
+        uses: actions/checkout@v4
+        with:
+          repository: crinklywrappr/engram-skills
+          token: ${{ secrets.ENGRAM_SKILLS_TOKEN }}
+          path: engram-skills
+
+      - name: Copy the plugin into the thin repo
+        run: rsync -a --delete --exclude='.git' plugin/ engram-skills/
+
+      - name: Commit and push when the plugin changed
+        run: |
+          cd engram-skills
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No plugin change to publish."
+            exit 0
+          fi
+          git commit -m "Publish engram plugin from ${GITHUB_SHA}"
+          git push origin HEAD:main
