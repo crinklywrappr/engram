@@ -35,11 +35,29 @@ When you start your own JVM, add these flags:
 --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
-## Version and release
+## Version
 
 `build.clj` derives the version as `1.0.<commit-count>` from the git revision
-count, and the uberjar name carries it. Do not hand-edit a version. A release to
-GHCR is manual. Trigger the "Release to GHCR" workflow by hand.
+count, and the uberjar name carries it. Do not hand-edit a version.
+
+## The Docker image release
+
+The image build and push to GHCR runs only on a manual trigger. The workflow is
+`Release to GHCR`, set to `workflow_dispatch`. A push never starts it. A
+maintainer starts it by hand from the Actions tab, with "Run workflow".
+
+The run does these steps in order:
+
+1. Run the tests as a gate.
+2. Build the uberjar.
+3. Derive the version from the jar name, and refuse an existing tag.
+4. Build the amd64 image and smoke-test `/healthz`.
+5. Build and push the multi-arch image to `ghcr.io/crinklywrappr/engram`, tagged
+   with the version and `latest`.
+6. Tag the release commit `v<version>` and push the tag.
+
+The multi-arch image covers linux/amd64 and linux/arm64. The version tag never
+overwrites an existing one, so each release is a new version.
 
 ## A slow first eval
 
@@ -65,10 +83,7 @@ The system starts in this order:
 1. Open the connection.
 2. Run the migrations.
 3. Reopen the connection.
-4. Load the configuration.
-5. Start the stats writer.
-6. Build the handler.
-7. Start the server.
+4. ...
 
 The reopen after the migrations matters. Datalevin builds its full-text engine
 from the schema present at connection-open time.
