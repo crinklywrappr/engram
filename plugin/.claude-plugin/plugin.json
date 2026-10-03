@@ -2,7 +2,7 @@
   "name": "engram",
   "displayName": "engram",
   "description": "Recall and store durable per-user memory in engram, the self-hosted memory server, over SSH. Loads relevant memories at session start, stores atomic facts during work, and migrates old markdown memory files.",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "author": {
     "name": "crinklywrappr"
   },
