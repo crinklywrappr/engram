@@ -1,22 +1,35 @@
 # engram
 
-engram is a self-hosted, per-user memory server. A memory is one atomic fact
-tagged with `category:label` pairs. The server stores facts in Datalevin and
-serves them over a small REST API. Claude reaches the API through a skill that
-talks over SSH, so no secret ever lands in a configuration file.
+engram is a self-hosted memory server for Claude. It stores what you want Claude
+to remember across sessions, on a box you own. Each user is a separate private
+store, keyed by an SSH key. It runs as one small Docker container, and it adds few
+tokens to a session.
+
+## Why engram
+
+- Your memories live on your own server, not a third-party service.
+- Each SSH key is its own private store. One user never sees the memories of another.
+- A session loads memory in two calls, so the token cost stays small.
+- One container runs the server, the SSH layer, and the auth proxy. Only the SSH
+  port is open.
+
+A memory is one atomic fact tagged with `category:label` pairs. Claude reaches the
+server through a skill that talks over SSH, so no secret lands in a configuration
+file.
+
+## Documentation
+
+To deploy the server, read [the admin guide](doc/admin-guide.md). To install the
+skill in Claude Code, read [the user guide](doc/user-guide.md).
 
 ## Design
 
 - Storage is Datalevin, embedded. Schema and migrations use syncopate.
 - The web layer is reitit on http-kit, with a Swagger page at `/api-docs`.
-- Each user is isolated by their SSH key. The key comment is the user id. Reads
-  and writes always filter by user, so one user never sees another's memories.
+- Each user is isolated by an SSH key. Reads and writes always filter by user.
 - Auth is a forced-command SSH proxy. `engram-proxy` adds the trusted
   `X-Engram-User` header and forwards to the server on localhost.
-- The recall call returns matches plus the transitive related-by-`src` closure,
-  streamed as NDJSON so a large response never has to be held whole in memory.
-
-The full design record is in `docs/` and the plan file.
+- A recall streams NDJSON, so a large response never sits whole in memory.
 
 ## Develop
 
@@ -26,7 +39,7 @@ Run the tests:
 clojure -M:test
 ```
 
-Run the server locally on port 8080 (it reads the sample configuration under `deploy/`):
+Run the server locally on port 8080:
 
 ```bash
 clojure -M:run
@@ -38,51 +51,23 @@ Build the uberjar:
 clojure -T:build ci
 ```
 
-## Deploy
-
-The server runs in one Docker container that also runs sshd and `engram-proxy`.
-Only the SSH port is exposed. Build and start it:
-
-```bash
-docker compose up --build
-```
-
-Before starting, do two things:
-
-1. Copy `deploy/engram-config.example.edn`, edit it, and mount it at
-   `/config/engram-config.edn`. Compose already mounts the sample.
-2. Create `deploy/authorized_keys` from `deploy/authorized_keys.example`. Add one
-   line per trusted user. Every line must start with
-   `command="engram-proxy --user <id>"`.
-
-## Use from Claude
-
-Add an SSH host and install the skill. See `skills/CLAUDE-nudge.md` for the
-`~/.ssh/config` entry and the two lines to add to the user-level `CLAUDE.md`. The
-`skills/engram-recall` skill holds the recall and write protocol. The
-`skills/migrate` skill imports old markdown memories.
-
 ## API
 
-All routes below require the `X-Engram-User` header that `engram-proxy` injects.
+All routes require the `X-Engram-User` header that `engram-proxy` injects.
 
-| Method | Path               | Purpose                                        |
-| ------ | ------------------ | ---------------------------------------------- |
+| Method | Path               | Purpose                                         |
+| ------ | ------------------ | ----------------------------------------------- |
 | GET    | `/config`          | The array of acceptable category configurations |
-| GET    | `/stats`           | The caller's `category:label` counts           |
-| POST   | `/memories/recall` | Recall matches plus the transitive closure     |
-| POST   | `/memories`        | Create one atomic fact                         |
-| PUT    | `/memories/:id`    | Correct a fact                                 |
-| GET    | `/healthz`         | Health check                                   |
+| GET    | `/stats`           | Recall counts for the caller                    |
+| POST   | `/memories/recall` | Recall matches plus the transitive closure      |
+| POST   | `/memories`        | Create one atomic fact                          |
+| PUT    | `/memories/:id`    | Correct a fact                                  |
+| DELETE | `/memories/:id`    | Delete a fact                                   |
+| POST   | `/memories/batch`  | Apply grouped creates, updates, and deletes     |
+| GET    | `/healthz`         | Health check                                    |
 
-## Category configuration
-
-The configuration is admin-authored and mounted. It holds the stats half-life
-and an array of acceptable configurations. A configuration maps each category to
-a cardinality: `1` exactly one, `?` zero or one, `*` zero or more, `+` one or
-more. When a memory satisfies one configuration, it is valid. Categories are
-closed to the configuration. Labels are open, but must be lowercase kebab-case.
-The server always imposes `src` (exactly one) and `related` (zero or more).
+The configuration structure and the deploy mounts live in [the admin
+guide](doc/admin-guide.md).
 
 ## License
 
