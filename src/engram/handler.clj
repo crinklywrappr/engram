@@ -64,9 +64,9 @@
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
-     :body {:stats {:recalls (mapv (fn [{:keys [category label lifetime recent]}]
-                                     [category label lifetime recent])
-                                   (stats/recalls conn user (:half-life-days cfg)))}}}))
+     :body {:stats {:recalls (mapv (fn [{:keys [category label count lifetime recent]}]
+                                     [category label count lifetime recent])
+                                   (stats/catalog conn user (:half-life-days cfg)))}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations

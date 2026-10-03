@@ -411,6 +411,49 @@
         (is (= 2 (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (d/close conn)))))
 
+(deftest catalog-covers-the-pair-universe
+  (let [conn (fresh-conn)]
+    (try
+      ;; "clojure" sits on two of alice's memories and was never recalled.
+      ;; "datalevin" sits on one and was recalled twice.
+      (memory/create! conn "alice" {:content "m1" :src "a" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "clojure"] ["tech" "datalevin"]]})
+      ;; bob owns a pair alice must never see in her catalog.
+      (memory/create! conn "bob" {:content "secret" :src "z" :tags [["domain" "haskell"]]})
+      (seed-recall! conn "alice" 14 [["tech" "datalevin"]])
+      (seed-recall! conn "alice" 14 [["tech" "datalevin"]])
+      (let [rows (stats/catalog conn "alice" 14)
+            by-pair (into {} (map (juxt (juxt :category :label) identity)) rows)
+            cold (by-pair ["domain" "clojure"])
+            warm (by-pair ["tech" "datalevin"])]
+        (testing "a pair on a memory but never recalled still appears, with a lifetime of 0"
+          (is (some? cold))
+          (is (== 2 (:count cold)))
+          (is (== 0 (:lifetime cold)))
+          (is (== 0.0 (:recent cold))))
+        (testing "a recalled pair shows its real lifetime and a positive decayed recent"
+          (is (== 1 (:count warm)))
+          (is (== 2 (:lifetime warm)))
+          (is (pos? (:recent warm))))
+        (testing "a never-recalled pair never carries a nil count"
+          (is (every? (comp integer? :count) rows)))
+        (testing "one user never sees another user's pairs"
+          (is (not (contains? by-pair ["domain" "haskell"])))))
+      (finally (d/close conn)))))
+
+(deftest catalog-counts-only-memories-carrying-the-pair
+  (let [conn (fresh-conn)]
+    (try
+      (memory/create! conn "alice" {:content "m1" :src "a" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "m3" :src "c" :tags [["domain" "databases"]]})
+      (let [by-pair (into {} (map (juxt (juxt :category :label) :count))
+                          (stats/catalog conn "alice" 14))]
+        (testing "the count equals the number of the caller's memories that carry the pair"
+          (is (== 2 (by-pair ["domain" "clojure"])))
+          (is (== 1 (by-pair ["domain" "databases"])))))
+      (finally (d/close conn)))))
+
 ;; ---------- handler: auth, 409, streaming ----------
 
 (defn- request
@@ -621,17 +664,19 @@
   (let [conn (fresh-conn)
         app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
     (try
+      (memory/create! conn "alice" {:content "prefer ==" :src "s" :tags [["domain" "clojure"]]})
       (seed-recall! conn "alice" (:half-life-days cfg) [["domain" "clojure"]])
       (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
             body (body-json resp)]
-        (testing "the stats body nests the recall rows under :stats then :recalls, as tuples"
+        (testing "the stats body nests the recall rows under :stats then :recalls, as five-element tuples"
           (is (== 200 (:status resp)))
           (is (vector? (get-in body [:stats :recalls])))
           (let [row (first (get-in body [:stats :recalls]))]
             (is (= "domain" (nth row 0)))
             (is (= "clojure" (nth row 1)))
-            (is (== 1 (nth row 2)))
-            (is (number? (nth row 3))))))
+            (is (== 1 (nth row 2)))                         ; count: one memory carries the pair
+            (is (== 1 (nth row 3)))                         ; lifetime: one recall
+            (is (number? (nth row 4))))))                   ; recent: decayed count
       (finally (d/close conn)))))
 
 (deftest error-logging-and-correlation-id

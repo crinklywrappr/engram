@@ -39,6 +39,62 @@
                  :recent (* (double dec)
                             (decay-factor half-life-days (- now-ms (.getTime last))))})))))
 
+(defn- pair-rows
+  "Left-join the stat row onto every tag pair on the caller's memories. Return
+  raw datalog rows `[category label count lifetime decayed last-request]`, one per
+  pair, with `count` the number of the caller's memories that carry the pair. The
+  or-join binds the stored lifetime, decayed weight, and last-request when a stat
+  row exists, and grounds zero defaults through the not-join branch when none
+  does. The no-stat branch grounds last-request to a long rather than a Date, so
+  the caller can tell a real row from a defaulted one by its type."
+  [db user]
+  (d/q '[:find ?c ?l (count-distinct ?e) ?life ?dec ?last
+         :in $ ?u
+         :where
+         [?e :memory/user ?u]
+         [?e :memory/tag ?t]
+         [?t :tag/category ?c]
+         [?t :tag/label ?l]
+         (or-join [?u ?c ?l ?life ?dec ?last]
+                  (and [?s :stat/user ?u]
+                       [?s :stat/category ?c]
+                       [?s :stat/label ?l]
+                       [?s :stat/lifetime ?life]
+                       [?s :stat/decayed ?dec]
+                       [?s :stat/last-request ?last])
+                  (and (not-join [?u ?c ?l]
+                                 [?s :stat/user ?u]
+                                 [?s :stat/category ?c]
+                                 [?s :stat/label ?l])
+                       [(ground 0) ?life]
+                       [(ground 0.0) ?dec]
+                       [(ground 0) ?last]))]
+       db user))
+
+(defn catalog
+  "Return the caller's recall catalog: one map per tag pair on the caller's
+  memories. Each map carries :category, :label, :count (the number of the
+  caller's memories that carry the pair), :lifetime (the monotonic recall count,
+  0 when the pair was never recalled), and :recent (the decayed recent count
+  projected to now, 0.0 when never recalled). A pair that no recall has touched
+  still appears, so a fresh store gives the client pairs to choose from on the
+  first recall.
+
+  The pairs and the raw stat columns come from `pair-rows`. The recent
+  projection, which datalog cannot compute because it needs the current time,
+  runs here: a real Date last-request decays the stored weight, and the grounded
+  no-stat row is 0.0."
+  [conn user half-life-days]
+  (let [now-ms (System/currentTimeMillis)]
+    (mapv (fn [[c l n life dec last]]
+            {:category c :label l :count n
+             :lifetime (long life)
+             :recent   (if (instance? Date last)
+                         (* (double dec)
+                            (decay-factor half-life-days (- now-ms (.getTime ^Date last))))
+                         0.0)})
+          (pair-rows (d/db conn) user))))
+
 (defn- extant-recalls [db user category label]
   (d/q '[:find [?life ?dec ?last]
          :in $ ?u ?c ?l

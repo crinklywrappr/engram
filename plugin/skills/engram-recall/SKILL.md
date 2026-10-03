@@ -51,10 +51,12 @@ Read them to pick labels that match how the admin means each category.
 
 ## Recall: two calls
 
-1. `ssh engram GET /stats` returns your recall counts. The body is
-   `{"stats": {"recalls": [ ... ]}}`. Each entry is a positional row
-   `[category, label, lifetime, recent]`. Use the lifetime and the recent value to
-   choose the pairs worth loading.
+1. `ssh engram GET /stats` returns one row for every category:label pair on your
+   memories. The body is `{"stats": {"recalls": [ ... ]}}`. Each entry is a
+   positional row `[category, label, count, lifetime, recent]`. The count is how
+   many of your memories carry the pair. A pair you never recalled still appears,
+   with a lifetime of 0 and a recent of 0.0. Use the count, the lifetime, and the
+   recent value to choose the pairs worth loading.
 2. `POST /memories/recall` with `{"pairs": [["category","label"], ...]}` returns
    the matching memories plus every memory linked to them through `related`,
    followed transitively. Read every line after the header line.
@@ -77,7 +79,7 @@ Rules:
 
 - One fact states one thing. If a fact needs a list, write one fact per item.
 - `src` is the source identity. Atomic facts split from one source share a src.
-- `src` is analogous to the filename you would assign to markdown memories.
+- `src` is analogous to the filename you assign to markdown memories.
 - `related` links to other memories by their `src`. The server follows these
   links transitively on a recall.
 - Labels, `src`, and each `related` value must be lowercase kebab-case tokens: a

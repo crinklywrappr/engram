@@ -65,10 +65,11 @@
                       [:examples {:optional true} [:vector :string]]]]]])
 ;; /stats nests the recall rows under :stats then :recalls, so a later stat type
 ;; can sit beside recalls without breaking the envelope. Each row is a positional
-;; tuple [category label lifetime recent], matching the positional pair the recall
-;; body takes.
+;; tuple [category label count lifetime recent]. The pair and count come from the
+;; caller's memories, so a never-recalled pair still appears with a lifetime of 0
+;; and a recent of 0.0.
 (def StatsOut
-  [:map [:stats [:map [:recalls [:vector [:tuple :string :string :int number?]]]]]])
+  [:map [:stats [:map [:recalls [:vector [:tuple :string :string :int :int number?]]]]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
 (def ErrorOut   [:map [:error :string]])
