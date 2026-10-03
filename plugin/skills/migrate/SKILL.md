@@ -25,6 +25,13 @@ build a preview, then apply it after the user approves.
   labels during the migration, so you do not add a near-duplicate of a label that
   already exists.
 
+The cardinality says how many labels of a category a memory carries:
+
+- `1` exactly one
+- `?` zero or one
+- `*` zero or more
+- `+` one or more
+
 ## Phase 1: distill and preview (dry run)
 
 For each markdown file, distill its content into standalone atomic facts:
@@ -38,28 +45,31 @@ For each markdown file, distill its content into standalone atomic facts:
   lowercase kebab-case. Reuse labels across facts. Do not invent near-duplicates.
 - Make sure each fact's categories satisfy one configuration from `GET /config`.
 
-Write the full proposed fact set to a preview file (for example
-`.scratch/migrate/<project>-preview.edn`), one fact per entry, and show it. Do
+Write the full proposed fact set to a preview file in JSON. Use the batch body
+shape: `{"create": [ fact, fact, ... ]}`, one entry per fact. Put the file at
+`~/.claude/projects/<project-slug>/<project>-preview.json`. The project slug is
+the one Claude Code already uses for the project. Each `fact` has the same shape
+as a single `POST /memories` body:
+
+```json
+{"content": "one fact stated plainly",
+ "src": "source-file-name",
+ "tags": [["domain","clojure"],["tech","datalevin"]],
+ "related": ["another-src"]}
+```
+
+`content` is the one fact. `src` is the source file name in kebab-case without
+the extension. `tags` is a list of `[category, label]` pairs. `related` is a list
+of other `src` values this fact links to, and it is optional. Show the file. Do
 not POST anything yet.
 
 ## Phase 2: apply (after approval)
 
 Once the user approves the preview:
 
-1. Send every fact in one batch. `POST /memories/batch` with a body
-   `{"create": [ fact, fact, ... ]}`, one entry per distilled fact. Do not send a
-   call per fact. Each `fact` is the same shape as a single `POST /memories` body:
-
-   ```json
-   {"content": "one fact stated plainly",
-    "src": "source-file-name",
-    "tags": [["domain","clojure"],["tech","datalevin"]],
-    "related": ["another-src"]}
-   ```
-
-   `content` is the one fact. `src` is the source file name in kebab-case without
-   the extension. `tags` is a list of `[category, label]` pairs. `related` is a
-   list of other `src` values this fact links to, and it is optional.
+1. Send the preview file as the batch body. `POST /memories/batch` with the
+   preview file on stdin. The preview is already in the batch shape, so send it
+   with no reformatting. Do not send a call per fact.
 2. Read the result. On `HTTP 200` the body is `{"ids":[...],"applied":n}`, and the
    migration is done. On `HTTP 422` the body is `{"errors":[...]}`, one entry per
    bad fact, each with its index `i` in the create list. Nothing was written,

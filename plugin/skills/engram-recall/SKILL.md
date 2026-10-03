@@ -40,10 +40,17 @@ after it is one memory.
 
 ## Session start: load the configuration once
 
-Run `ssh engram GET /config` one time per session. It returns
+Run `ssh engram GET /config < /dev/null` one time per session. It returns
 `{"configurations": [ ... ]}`. Each configuration is a map of category to a
 cardinality (`1`, `?`, `*`, `+`). A memory you write must satisfy one
 configuration. Keep this in mind for the rest of the session.
+
+The cardinality says how many labels of a category a memory carries:
+
+- `1` exactly one
+- `?` zero or one
+- `*` zero or more
+- `+` one or more
 
 When the admin describes the categories, the body also carries a `categories`
 map. Each entry gives one category a `description` and a vector of `examples`.
