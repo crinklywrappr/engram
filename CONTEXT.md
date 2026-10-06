@@ -6,13 +6,28 @@ category and label pairs, and returns them together with the facts they link to.
 ## Language
 
 **Memory**:
-One standalone atomic fact owned by a user. It states one thing.
+One standalone atomic fact owned by a user. It states one thing. It is the
+long-term store, in contrast to a short-term memory.
 _Avoid_: note, record, entry
 
 **Atomic fact**:
 A single claim that stands on its own. A fact that needs a list is split into
 several facts, one per item.
 _Avoid_: observation, item
+
+**Short-term memory**:
+A loose task note a user stages during a task. It carries an id and free text in
+any form. It holds no tags and makes no atomic claim. It lives apart from a
+Memory. It never appears in a recall. A `/decompress` run promotes the worthwhile
+notes to Memories. The run clears the rest.
+_Avoid_: scratchpad, draft
+
+**Thought-process**:
+The bucket that holds a user's short-term memories for one task. The client names
+it in lowercase kebab-case. A good name describes the project and the task. It
+rarely collides. Another session can find it by name. Every short-term memory
+operation names one.
+_Avoid_: session, namespace, task-id
 
 **Category**:
 The namespace of a tag, for example `domain`. Categories are a closed set fixed
