@@ -259,3 +259,21 @@
   (let [db (d/db conn)
         f (partial eids-by-pair db user)]
     (query db user #{} [] #{} (map (partial vector f) pairs))))
+
+;; ---------- list all ----------
+
+(defn- all-eids [db user]
+  (d/q '[:find [?e ...]
+         :in $ ?u
+         :where [?e :memory/user ?u]]
+       db user))
+
+(defn all-memories
+  "Return a lazy seq of every wire memory `user` owns, in no set order. The eids
+  come back up front as cheap longs. Each memory map is pulled lazily, so the full
+  set never sits in memory at once. Responses are not truncated. The seq is lazy
+  over an immutable db snapshot, so realize it while `conn` is open."
+  [conn user]
+  (let [db (d/db conn)]
+    (map (fn [eid] (->wire (d/pull db pull-pattern eid)))
+         (all-eids db user))))

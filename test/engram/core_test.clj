@@ -137,6 +137,27 @@
         (is (= #{"g"} (set (map :src (memory/recall conn "alice" [["domain" "clojure"]])))))
         (finally (d/close conn))))))
 
+(deftest all-memories-returns-every-owned-memory
+  (let [conn (fresh-conn)]
+    (try
+      ;; a2 carries a non-conforming tag and links nothing: no single pair recall
+      ;; would surface it alongside a1, but all-memories must return both.
+      (memory/create! conn "alice" {:content "a1" :src "a" :tags [["domain" "clojure"]] :related ["b"]})
+      (memory/create! conn "alice" {:content "a2" :src "b" :tags [["tech" "datalevin"]]})
+      (memory/create! conn "bob"   {:content "b1" :src "z" :tags [["domain" "clojure"]]})
+      (let [rows (memory/all-memories conn "alice")
+            srcs (set (map :src rows))]
+        (testing "the function returns a lazy sequence"
+          (is (instance? clojure.lang.LazySeq rows)))
+        (testing "every memory the user owns appears"
+          (is (= #{"a" "b"} srcs)))
+        (testing "another user's memory never appears"
+          (is (not (contains? srcs "z"))))
+        (testing "each row carries the recall wire shape"
+          (let [m (first (filter #(= "a" (:src %)) rows))]
+            (is (= #{:id :content :src :tags :related} (set (keys m)))))))
+      (finally (d/close conn)))))
+
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
@@ -525,6 +546,31 @@
             lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
         (testing "every matched memory streams, not just the first chunk"
           (is (= (inc n) (count lines)))))          ; header line + n memories
+      (finally (d/close conn)))))
+
+(deftest handler-memories-streams-all
+  ;; GET /memories streams every memory the caller owns over NDJSON: the header
+  ;; line plus one line per memory, with nothing dropped and no other user's rows.
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))
+        n    40]
+    (try
+      (dotimes [i n]
+        (memory/create! conn "alice" {:content (str "m" i) :src (str "s" i)
+                                      :tags [["domain" "clojure"]]}))
+      (memory/create! conn "bob" {:content "secret" :src "z" :tags [["domain" "clojure"]]})
+      (let [resp  (request app :get "/memories" {:user "alice" :accept "application/x-ndjson"})
+            lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+            mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))]
+        (testing "the response is an NDJSON stream"
+          (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"]))))
+        (testing "the header line plus one line per owned memory, nothing dropped"
+          (is (= (inc n) (count lines)))
+          (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper)))))
+        (testing "another user's memory never appears"
+          (is (not (some #(= "secret" (:content %)) mems))))
+        (testing "each memory line carries the recall wire keys"
+          (is (every? #(every? % [:id :content :src]) mems))))
       (finally (d/close conn)))))
 
 (deftest handler-delete

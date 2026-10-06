@@ -61,6 +61,10 @@
         (ndjson-response {:header true :pairs pairs} mems)
         {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
 
+(defn- memories-handler [conn req]
+  (let [user (:engram/user req)]
+    (ndjson-response {:header true} (memory/all-memories conn user))))
+
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
@@ -140,7 +144,9 @@
                                           (:categories cfg) (assoc :categories (:categories cfg)))})}}]
     ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
                       :handler (fn [req] (stats-handler conn cfg req))}}]
-    ["/memories"       {:post {:parameters {:body schema/CreateBody}
+    ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall).
+    ["/memories"       {:get  {:handler (fn [req] (memories-handler conn req))}
+                        :post {:parameters {:body schema/CreateBody}
                                :responses  {201 {:body schema/IdOut} 409 {:body schema/Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
     ["/memories/batch" {:post {:parameters {:body schema/BatchBody}
