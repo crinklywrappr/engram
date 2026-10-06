@@ -158,6 +158,28 @@
             (is (= #{:id :content :src :tags :related} (set (keys m)))))))
       (finally (d/close conn)))))
 
+(deftest nonconforming-returns-only-failing-memories
+  (let [conn    (fresh-conn)
+        reject? #(config/tag-error (:tag-schema cfg) %)]
+    (try
+      (memory/create! conn "alice" {:content "ok" :src "ok" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "bad-tag" :src "bad" :tags [["tech" "datalevin"]]})
+      (memory/create! conn "alice" {:content "no-tags" :src "none"})
+      (memory/create! conn "bob"   {:content "bob-bad" :src "zz" :tags [["tech" "datalevin"]]})
+      (let [rows (memory/nonconforming conn "alice" reject?)
+            srcs (set (map :src rows))]
+        (testing "the function returns a lazy sequence"
+          (is (instance? clojure.lang.LazySeq rows)))
+        (testing "a conforming memory never appears"
+          (is (not (contains? srcs "ok"))))
+        (testing "a memory whose tags match no configuration appears"
+          (is (contains? srcs "bad")))
+        (testing "a memory with no tags appears"
+          (is (contains? srcs "none")))
+        (testing "another user's nonconforming memory never appears"
+          (is (not (contains? srcs "zz")))))
+      (finally (d/close conn)))))
+
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
@@ -591,6 +613,24 @@
           (is (not (some #(= "secret" (:content %)) mems))))
         (testing "each memory line carries the recall wire keys"
           (is (every? #(every? % [:id :content :src]) mems))))
+      (finally (d/close conn)))))
+
+(deftest handler-nonconforming-streams
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (memory/create! conn "alice" {:content "ok" :src "ok" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})
+      (memory/create! conn "bob"   {:content "bob-bad" :src "zz" :tags [["tech" "datalevin"]]})
+      (let [resp  (request app :get "/memories/nonconforming" {:user "alice" :accept "application/x-ndjson"})
+            lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+            mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))
+            srcs  (set (map :src mems))]
+        (testing "the response is an NDJSON stream with a header line"
+          (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"])))
+          (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper)))))
+        (testing "only the caller's nonconforming memory appears"
+          (is (= #{"bad"} srcs))))
       (finally (d/close conn)))))
 
 (deftest handler-delete

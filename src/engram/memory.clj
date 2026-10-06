@@ -277,3 +277,13 @@
   (let [db (d/db conn)]
     (map (fn [eid] (->wire (d/pull db pull-pattern eid)))
          (all-eids db user))))
+
+(defn nonconforming
+  "Return a lazy seq of the caller's wire memories that `reject?` rejects.
+  `reject?` takes a memory's tags (a vector of [category label] pairs, empty when
+  the memory carries none) and returns a truthy value when the memory fails
+  conformance. The caller injects the live configuration check, so this namespace
+  holds no configuration dependency. Lazy over the all-memories snapshot, so
+  realize it while `conn` is open."
+  [conn user reject?]
+  (filter #(reject? (:tags % [])) (all-memories conn user)))

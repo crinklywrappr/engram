@@ -58,6 +58,13 @@ One acceptable set of category-to-cardinality rules. A memory that satisfies any
 one configuration is valid.
 _Avoid_: schema, ruleset
 
+**Nonconforming memory**:
+A memory whose category:label set satisfies no configuration. It is the
+complement of a conforming memory, which satisfies one. A memory with no tags is
+nonconforming, because every configuration needs at least a domain. The
+nonconforming route and the `/conform` skill read these.
+_Avoid_: invalid, malformed, bad
+
 **Cardinality**:
 How many labels of a category a memory can carry: `1`, `?`, `*`, or `+`.
 _Avoid_: multiplicity, arity

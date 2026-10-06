@@ -65,6 +65,11 @@
   (let [user (:engram/user req)]
     (ndjson-response {:header true} (memory/all-memories conn user))))
 
+(defn- nonconforming-handler [conn cfg req]
+  (let [user    (:engram/user req)
+        reject? #(config/tag-error (:tag-schema cfg) %)]
+    (ndjson-response {:header true} (memory/nonconforming conn user reject?))))
+
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
@@ -156,6 +161,8 @@
     ;; No :responses: the NDJSON stream cannot be response-coerced (see schema/RecallOut).
     ["/memories/recall" {:post {:parameters {:body schema/RecallBody}
                                 :handler (fn [req] (recall-handler conn writer req))}}]
+    ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
+    ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
     ["/memories/:id"   {:put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/UpdateBody}
                                  :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut} 409 {:body schema/Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
