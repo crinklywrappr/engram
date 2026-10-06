@@ -70,7 +70,8 @@
     {:status 200
      :body {:stats {:recalls (mapv (fn [{:keys [category label count lifetime recent]}]
                                      [category label count lifetime recent])
-                                   (stats/catalog conn user (:half-life-days cfg)))}}}))
+                                   (stats/catalog conn user (:half-life-days cfg)))
+                    :link-density (stats/link-density conn user)}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations

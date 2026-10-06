@@ -475,6 +475,26 @@
           (is (== 1 (by-pair ["domain" "databases"])))))
       (finally (d/close conn)))))
 
+(deftest link-density-metrics
+  (let [conn (fresh-conn)]
+    (try
+      ;; a -> b -> c is one chain, d is isolated, e points at a ghost src.
+      (memory/create! conn "alice" {:content "a" :src "a" :related ["b"]})
+      (memory/create! conn "alice" {:content "b" :src "b" :related ["c"]})
+      (memory/create! conn "alice" {:content "c" :src "c"})
+      (memory/create! conn "alice" {:content "d" :src "d"})
+      (memory/create! conn "alice" {:content "e" :src "e" :related ["ghost"]})
+      (memory/create! conn "bob"   {:content "z" :src "z" :related ["z2"]})
+      (let [{:keys [avg-out-degree largest-wcc-fraction]} (stats/link-density conn "alice")]
+        (testing "average out-degree counts edges to real src nodes over all nodes"
+          (is (== 0.4 avg-out-degree)))          ; edges a->b, b->c; e->ghost excluded; 5 nodes
+        (testing "largest weakly-connected component is a fraction of the nodes"
+          (is (== 0.6 largest-wcc-fraction))))   ; {a,b,c} is 3 of 5 nodes
+      (testing "a user with no memories gets zero density"
+        (is (= {:avg-out-degree 0.0 :largest-wcc-fraction 0.0}
+               (stats/link-density conn "nobody"))))
+      (finally (d/close conn)))))
+
 ;; ---------- handler: auth, 409, streaming ----------
 
 (defn- request
@@ -723,6 +743,24 @@
             (is (== 1 (nth row 2)))                         ; count: one memory carries the pair
             (is (== 1 (nth row 3)))                         ; lifetime: one recall
             (is (number? (nth row 4))))))                   ; recent: decayed count
+      (finally (d/close conn)))))
+
+(deftest handler-stats-carries-link-density
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (memory/create! conn "alice" {:content "a" :src "a" :tags [["domain" "clojure"]] :related ["b"]})
+      (memory/create! conn "alice" {:content "b" :src "b" :tags [["domain" "clojure"]]})
+      (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
+            body (body-json resp)
+            ld   (get-in body [:stats :link-density])]
+        (testing "link density sits beside the recall rows under :stats"
+          (is (== 200 (:status resp)))
+          (is (vector? (get-in body [:stats :recalls])))
+          (is (map? ld)))
+        (testing "the two metrics are present and numeric"
+          (is (== 0.5 (:avg-out-degree ld)))           ; one edge a->b over two nodes
+          (is (== 1.0 (:largest-wcc-fraction ld)))))   ; {a,b} is the whole graph
       (finally (d/close conn)))))
 
 (deftest error-logging-and-correlation-id

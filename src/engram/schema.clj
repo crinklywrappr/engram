@@ -67,9 +67,14 @@
 ;; can sit beside recalls without breaking the envelope. Each row is a positional
 ;; tuple [category label count lifetime recent]. The pair and count come from the
 ;; caller's memories, so a never-recalled pair still appears with a lifetime of 0
-;; and a recent of 0.0.
+;; and a recent of 0.0. :link-density sits beside :recalls: the mean src out-degree
+;; and the largest weakly-connected component as a fraction of the src nodes.
 (def StatsOut
-  [:map [:stats [:map [:recalls [:vector [:tuple :string :string :int :int number?]]]]]])
+  [:map [:stats [:map
+                 [:recalls [:vector [:tuple :string :string :int :int number?]]]
+                 [:link-density [:map
+                                 [:avg-out-degree number?]
+                                 [:largest-wcc-fraction number?]]]]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
 (def ErrorOut   [:map [:error :string]])

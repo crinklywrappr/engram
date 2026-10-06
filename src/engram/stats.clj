@@ -1,10 +1,14 @@
 (ns engram.stats
-  "Per-user recall stats over Datalevin. Stateless: connection first.
+  "Per-user stats over Datalevin for the `/stats` endpoint. Stateless: connection
+  first.
 
   For each (user, category, label) pair we keep a monotonic lifetime count and
   an exponential-decay recent count. The recent count is updated on each recall
   and projected to the current time on read, using the half-life from the admin
   config.
+
+  The namespace also computes link density: graph-structure metrics over the
+  caller's src nodes and related edges, reported beside the recall counts.
 
   This namespace is the functional core: the read projection and the pure
   planner. The operational consumer, which owns the agent and the executors,
@@ -131,3 +135,73 @@
   `engram.stats.writer`."
   [pending-recalls]
   (reduce (fn [m [[user c l] n]] (assoc-in m [user [c l]] n)) {} pending-recalls))
+
+;; ---------- link density ----------
+
+(defn- component-from
+  "The set of nodes reachable from `start` through `adj`, skipping any node in
+  `seen`. This is one weakly-connected component, found by a depth-first walk."
+  [adj seen start]
+  (loop [stack [start], component #{}]
+    (if-let [x (peek stack)]
+      (let [stack (pop stack)]
+        (if (or (seen x) (component x))
+          (recur stack component)
+          (recur (into stack (adj x)) (conj component x))))
+      component)))
+
+(defn- largest-component-size
+  "Size of the largest weakly-connected component over `nodes`, using `adj`, an
+  undirected adjacency map of node to a neighbor set. Walk each unseen node's
+  component once and keep the largest."
+  [nodes adj]
+  (second
+   (reduce (fn [[seen largest] x]
+             (if (seen x)
+               [seen largest]
+               (let [c (component-from adj seen x)]
+                 [(into seen c) (max largest (count c))])))
+           [#{} 0]
+           nodes)))
+
+(defn- src-nodes
+  "The set of the caller's src values, which are the nodes of the link graph."
+  [db user]
+  (set (d/q '[:find [?src ...]
+              :in $ ?u
+              :where [?e :memory/user ?u] [?e :memory/src ?src]]
+            db user)))
+
+(defn- src-related-pairs
+  "Every [src related] pair on the caller's memories. These are the raw directed
+  edges, before the filter down to real nodes."
+  [db user]
+  (d/q '[:find ?src ?rel
+         :in $ ?u
+         :where [?e :memory/user ?u]
+                [?e :memory/src ?src]
+                [?e :memory/related ?rel]]
+       db user))
+
+(defn link-density
+  "Return the caller's memory-graph link density. `:avg-out-degree` is the mean
+  number of distinct related-src edges per src node. `:largest-wcc-fraction` is
+  the size of the largest weakly-connected component over the src nodes, as a
+  fraction of the node count. A node is one of the caller's src values. A directed
+  edge runs from a memory's src to each related src that is itself a node, apart
+  from a self-edge and an edge to a src no memory owns. Both values are 0.0 when
+  the caller owns no memory."
+  [conn user]
+  (let [db    (d/db conn)
+        nodes (src-nodes db user)
+        edges (set (for [[s r] (src-related-pairs db user)
+                         :when (and (contains? nodes r) (not= s r))] [s r]))
+        n     (count nodes)]
+    (if (zero? n)
+      {:avg-out-degree 0.0 :largest-wcc-fraction 0.0}
+      (let [adj (reduce (fn [m [s r]]
+                          (-> m (update s (fnil conj #{}) r)
+                              (update r (fnil conj #{}) s)))
+                        {} edges)]
+        {:avg-out-degree       (double (/ (count edges) n))
+         :largest-wcc-fraction (double (/ (largest-component-size nodes adj) n))}))))
