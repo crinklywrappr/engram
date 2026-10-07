@@ -32,6 +32,7 @@ Examples:
 ssh engram GET /config < /dev/null
 ssh engram GET /recalls < /dev/null
 echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall
+echo '{"search":"deploy to the pi","limit":20}' | ssh engram POST /memories/search
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
 ```
 
@@ -74,6 +75,20 @@ Read them to pick labels that match how the admin means each category.
 
 Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
 `related` appear too.
+
+## Search: the recovery path
+
+Search finds a fact that a recall by pairs does not surface. `POST
+/memories/search` runs one ranked full-text query over content and src. The body
+is `{"search": "...", "limit": 20, "categories": ["domain"]}`. Only `search` is
+required. `limit` defaults to 20 and caps at 100. A larger `limit` clamps to 100.
+
+The response is `{"results": [ ... ]}`, ranked by relevance. Each row carries
+`id`, `src`, `content`, and a `score`. A row carries `tags` only for the
+categories you name. A body that names no categories returns no `tags`.
+
+Search follows no related links. Read the candidates and choose the ones that
+matter.
 
 ## Store a fact
 

@@ -8,8 +8,10 @@
             [engram.handler :as handler]
             [engram.memory :as memory]
             [engram.migrations :as migrations]
+            [engram.search :as search]
             [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
+            [engram.system :as system]
             [jsonista.core :as json]
             [malli.core :as m]
             [syncopate.core :as sc])
@@ -20,13 +22,13 @@
            (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defn fresh-conn
-  "A migrated, reopened connection on a fresh temp dir (mirrors the system)."
+  "A migrated connection on a fresh temp dir, opened exactly as the system does
+  through system/migrated-conn: a bare open, the migrations, a re-index when the
+  search configuration drifted (always on a fresh dir), then a reopen with the
+  search options."
   []
-  (let [dir (.toString (Files/createTempDirectory "engram-test" (make-array FileAttribute 0)))
-        c   (d/get-conn dir)]
-    (sc/migrate-all! (sc/store c) migrations/migrations)
-    (d/close c)
-    (d/get-conn dir)))
+  (let [dir (.toString (Files/createTempDirectory "engram-test" (make-array FileAttribute 0)))]
+    (system/migrated-conn (d/get-conn dir) dir)))
 
 ;; ---------- tag and token validation ----------
 
@@ -242,6 +244,95 @@
         (testing "a missing id gets nil"
           (is (nil? (memory/fetch conn "alice" (str (java.util.UUID/randomUUID)))))))
       (finally (d/close conn)))))
+
+(deftest search-ranks-content-and-src
+  (let [conn (fresh-conn)]
+    (try
+      ;; engram-deploy: term in src and content. deploy-notes: term in src only.
+      ;; clojure-tips: term three times in content. unrelated: no term.
+      (memory/create! conn "alice" {:content "deploy the server to the pi" :src "engram-deploy"
+                                    :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "a short note" :src "deploy-notes"})
+      (memory/create! conn "alice" {:content "deploy deploy deploy everywhere" :src "clojure-tips"})
+      (memory/create! conn "alice" {:content "nothing relevant here" :src "unrelated"})
+      ;; bob owns a matching memory alice must never see.
+      (memory/create! conn "bob" {:content "bob deploys things" :src "bob-deploy"})
+      (let [rows (memory/search conn "alice" "deploy" 10)
+            srcs (set (map :src rows))]
+        (testing "every alice memory with the term in content or src matches, deduped"
+          (is (== 3 (count rows)))
+          (is (= #{"engram-deploy" "deploy-notes" "clojure-tips"} srcs)))
+        (testing "a src is searchable by a hyphen-split word (deploy only in deploy-notes's src)"
+          (is (contains? srcs "deploy-notes")))
+        (testing "a non-matching memory never appears"
+          (is (not (contains? srcs "unrelated"))))
+        (testing "another user's match never appears"
+          (is (not (contains? srcs "bob-deploy"))))
+        (testing "each row carries a numeric score and no related key"
+          (is (every? #(number? (:score %)) rows))
+          (is (not-any? :related rows)))
+        (testing "rows are ranked by score, descending"
+          (is (= (map :score rows) (sort > (map :score rows)))))
+        (testing "the memory with the term three times outranks the single mentions"
+          (is (= "clojure-tips" (:src (first rows))))))
+      (testing "the limit caps the count and keeps the top ranks"
+        (let [top1 (memory/search conn "alice" "deploy" 1)]
+          (is (== 1 (count top1)))
+          (is (= "clojure-tips" (:src (first top1))))))
+      (testing "a term that matches nothing returns an empty vector"
+        (is (= [] (memory/search conn "alice" "nonexistentterm" 10))))
+      (testing "the matched word in a src carries over to the whole-src token too"
+        (is (contains? (set (map :src (memory/search conn "alice" "engram" 10))) "engram-deploy")))
+      (finally (d/close conn)))))
+
+(deftest reindex-decision
+  (let [full #{:memory/content :memory/src}]
+    (testing "no drift: equal opts signature and unchanged full-text set skips re-index"
+      (is (false? (boolean (search/reindex? search/engine-opts full full)))))
+    (testing "a grown full-text set forces a re-index"
+      (is (true? (boolean (search/reindex? search/engine-opts #{:memory/content} full)))))
+    (testing "absent persisted opts (a fresh or pre-feature store) forces a re-index"
+      (is (true? (boolean (search/reindex? nil full full)))))
+    (testing "a changed index-structure flag forces a re-index"
+      (is (true? (boolean (search/reindex? (assoc search/engine-opts :index-position? false)
+                                           full full)))))))
+
+(deftest search-opts-persist-and-round-trip
+  ;; Pins the Datalevin behavior the drift check relies on: our inter-fn
+  ;; search-opts survive a close and a bare reopen. If a Datalevin upgrade breaks
+  ;; this, system/migrated-conn would silently re-index on every boot, so this
+  ;; test fails loudly instead.
+  (let [dir (.toString (Files/createTempDirectory "engram-opts" (make-array FileAttribute 0)))]
+    (let [c (d/get-conn dir {} search/conn-opts)]
+      (sc/migrate-all! (sc/store c) migrations/migrations)
+      (d/close c))
+    (let [c (d/get-conn dir)]                                   ; bare reopen, exactly as the system does
+      (try
+        (testing "the persisted search-opts round-trip to an equal signature"
+          (is (= (search/opts-signature search/engine-opts)
+                 (search/opts-signature (:search-opts (d/opts c))))))
+        (testing "a bare open yields the persisted analyzer, not the default (index-position? default is false)"
+          (is (true? (:index-position? (:search-opts (d/opts c))))))
+        (finally (d/close c))))))
+
+(deftest search-backfills-existing-src-on-migration
+  ;; Mirror an existing deployment through the real boot path: a src is written
+  ;; while it is not yet full-text, then system/migrated-conn migrates src to
+  ;; full-text, sees the full-text set grow, and re-indexes to backfill it.
+  (let [dir (.toString (Files/createTempDirectory "engram-bf" (make-array FileAttribute 0)))]
+    (let [c (d/get-conn dir)]
+      (sc/migrate-all! (sc/store c) (take 1 migrations/migrations))  ; 001 only: src not full-text
+      (d/close c))
+    (let [c (d/get-conn dir {} search/conn-opts)]                    ; reopen so the content engine is built
+      (memory/create! c "alice" {:content "a short note" :src "engram-deploy"})
+      (testing "before the src migration, a src-only word does not match"
+        (is (empty? (memory/search c "alice" "engram" 10))))
+      (d/close c))
+    (let [conn (system/migrated-conn (d/get-conn dir) dir)]          ; applies 002 and backfills on drift
+      (try
+        (testing "after migrating and the drift re-index, the existing src is searchable by its words"
+          (is (= #{"engram-deploy"} (set (map :src (memory/search conn "alice" "engram" 10))))))
+        (finally (d/close conn))))))
 
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
@@ -719,6 +810,54 @@
         (testing "a malformed id is a 400 coercion failure"
           (is (== 400 (:status (request app :get "/memories/not-a-uuid"
                                         {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest handler-search-route
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (memory/create! conn "alice" {:content "deploy to the pi" :src "engram-deploy"
+                                    :tags [["domain" "clojure"] ["tech" "datalevin"]]})
+      (memory/create! conn "alice" {:content "unrelated" :src "other"})
+      (memory/create! conn "bob"   {:content "deploy secret" :src "bob-deploy"})
+      (testing "a search returns a bounded results array, ranked and user-scoped"
+        (let [resp (request app :post "/memories/search"
+                            {:user "alice" :accept "application/json" :body {:search "deploy"}})
+              body (body-json resp)]
+          (is (== 200 (:status resp)))
+          (is (vector? (:results body)))
+          (is (= #{"engram-deploy"} (set (map :src (:results body)))))
+          (let [row (first (:results body))]
+            (is (number? (:score row)))
+            (is (not (contains? row :related))))))
+      (testing "with no categories, a row carries no tags"
+        (let [row (first (:results (body-json (request app :post "/memories/search"
+                                                       {:user "alice" :accept "application/json"
+                                                        :body {:search "deploy"}}))))]
+          (is (not (contains? row :tags)))))
+      (testing "an empty categories vector also yields no tags"
+        (let [row (first (:results (body-json (request app :post "/memories/search"
+                                                       {:user "alice" :accept "application/json"
+                                                        :body {:search "deploy" :categories []}}))))]
+          (is (not (contains? row :tags)))))
+      (testing "categories project the tags to the named ones only"
+        (let [row (first (:results (body-json (request app :post "/memories/search"
+                                                       {:user "alice" :accept "application/json"
+                                                        :body {:search "deploy" :categories ["domain"]}}))))]
+          (is (= [["domain" "clojure"]] (:tags row)))))
+      (testing "a blank search string is a 400"
+        (is (== 400 (:status (request app :post "/memories/search"
+                                      {:user "alice" :accept "application/json" :body {:search "   "}})))))
+      (testing "a missing search string is a 400 (coercion)"
+        (is (== 400 (:status (request app :post "/memories/search"
+                                      {:user "alice" :accept "application/json" :body {:limit 5}})))))
+      (testing "an over-cap limit is clamped, not rejected"
+        (is (== 200 (:status (request app :post "/memories/search"
+                                      {:user "alice" :accept "application/json"
+                                       :body {:search "deploy" :limit 999}})))))
+      (testing "a request without the user header is rejected"
+        (is (== 401 (:status (request app :post "/memories/search"
+                                      {:accept "application/json" :body {:search "deploy"}})))))
       (finally (d/close conn)))))
 
 (deftest handler-delete

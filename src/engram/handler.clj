@@ -131,6 +131,24 @@
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
 
+(defn- project-tags
+  "Project a search row's tags to the categories the client named. Keep only a
+  pair whose category is in `cats`; drop the :tags key when the client named no
+  category or none match."
+  [cats row]
+  (let [kept (when cats (filterv (fn [[c _]] (cats c)) (:tags row)))]
+    (if (seq kept) (assoc row :tags kept) (dissoc row :tags))))
+
+(defn- search-handler [conn req]
+  (let [user (:engram/user req)
+        {:keys [search limit categories]} (get-in req [:parameters :body])]
+    (if (str/blank? search)
+      {:status 400 :body {:error "search must not be blank"}}
+      (let [lim  (min 100 (or limit 20))
+            cats (not-empty (set categories))
+            rows (mapv (partial project-tags cats) (memory/search conn user search lim))]
+        {:status 200 :body {:results rows}}))))
+
 (defn- fetch-handler [conn req]
   (let [user (:engram/user req)
         id   (get-in req [:parameters :path :id])]
@@ -200,6 +218,10 @@
                                 :handler (fn [req] (recall-handler conn writer req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
+    ;; Static path, resolves ahead of /memories/:id. Bounded result, so it is response-coerced.
+    ["/memories/search" {:post {:parameters {:body schema/SearchBody}
+                                :responses  {200 {:body schema/SearchOut} 400 {:body schema/ErrorOut}}
+                                :handler (fn [req] (search-handler conn req))}}]
     ["/memories/:id"   {:get    {:parameters {:path [:map [:id schema/IdStr]]}
                                  :responses  {200 {:body schema/MemoryOut} 404 {:body schema/ErrorOut}}
                                  :handler (fn [req] (fetch-handler conn req))}

@@ -2,12 +2,21 @@
   "Integrant components: conn → migrated → config → handler → server.
 
   This process IS the database. Halting the connection flushes LMDB. The
-  migrated component reopens the connection after migrations because Datalevin
-  builds its full-text engine from the schema present at connection-open time."
+  migrated component runs the migrations, then re-indexes only when the search
+  index has drifted from what engram intends, because Datalevin builds its
+  full-text engine from the schema present at connection-open time, and a schema
+  that newly marks an attribute full-text does not back-index the values already
+  stored. The drift check reads the persisted search-opts and the full-text
+  attribute set, so a steady-state boot skips the costly rebuild. The bare
+  connection is opened without the search options, so its persisted opts can be
+  read before the serving open overwrites them. The serving connection is always
+  opened with the search options, because re-index's own connection does not
+  carry the analyzer for later writes."
   (:require [datalevin.core :as d]
             [engram.config :as config]
             [engram.handler :as handler]
             [engram.migrations :as migrations]
+            [engram.search :as search]
             [engram.stats.writer :as stat-writer]
             [integrant.core :as ig]
             [org.httpkit.server :as hk]
@@ -15,17 +24,32 @@
 
 (defn- data-path [path] (or (System/getenv "ENGRAM_DATA_DIR") path))
 
+(defn migrated-conn
+  "Given a freshly opened bare `conn` and its data `path`, run the migrations,
+  re-index only when the persisted search configuration or the full-text
+  attribute set has drifted, then return a connection opened with the search
+  options for serving. Reads the persisted opts and schema off `conn` before
+  migrating, closes `conn`, and opens the serving connection at `path`. Shared by
+  the migrated component and the test harness so both decide identically."
+  [conn path]
+  (let [persisted (:search-opts (d/opts conn))
+        before    (search/fulltext-attrs (d/schema conn))]
+    (sc/migrate-all! (sc/store conn) migrations/migrations)
+    (let [after (search/fulltext-attrs (d/schema conn))]
+      (if (search/reindex? persisted before after)
+        (d/close (d/re-index conn {:search-opts search/engine-opts}))
+        (d/close conn))
+      (d/get-conn path {} search/conn-opts))))
+
 (defmethod ig/init-key :engram.db/conn [_ {:keys [path]}]
   (d/get-conn (data-path path)))
 
 (defmethod ig/halt-key! :engram.db/conn [_ conn]
-  ;; may already be closed — :engram.db/migrated reopens and closes this one
+  ;; may already be closed — :engram.db/migrated closes this one
   (try (d/close conn) (catch Exception _)))
 
 (defmethod ig/init-key :engram.db/migrated [_ {:keys [conn path]}]
-  (sc/migrate-all! (sc/store conn) migrations/migrations)
-  (d/close conn)
-  (d/get-conn (data-path path)))
+  (migrated-conn conn (data-path path)))
 
 (defmethod ig/halt-key! :engram.db/migrated [_ conn]
   (try (d/close conn) (catch Exception _)))

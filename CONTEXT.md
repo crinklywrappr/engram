@@ -81,6 +81,13 @@ The act of asking for memories by their category:label pairs. A recall returns
 the matching memories and the memories they link to across hops.
 _Avoid_: query, request, fetch
 
+**Search**:
+A ranked full-text lookup over a memory's content and src. It returns a bounded,
+ranked candidate list and follows no related links. Search recovers a fact that a
+recall by pairs does not surface. The client chooses from the candidates and
+passes their ids to a later recall.
+_Avoid_: query, grep, find
+
 **Recall count**:
 How often a category:label pair was recalled. engram keeps it as a lifetime
 total and a recent decay measure. On the wire a recalls row is a positional row of

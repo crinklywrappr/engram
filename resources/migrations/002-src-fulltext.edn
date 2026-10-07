@@ -1,0 +1,8 @@
+;; Make :memory/src full-text indexed, so search covers src as well as content.
+;;
+;; :schema/alter modifies an existing attribute, so it needs an explicit :down.
+;; Marking the attribute full-text does not re-index existing src values. The
+;; system re-indexes right after migrating (see engram.system), and that pass
+;; backfills every src value with the search analyzer.
+{:up   {:schema/alter {:memory/src {:db/valueType :db.type/string :db/fulltext true}}}
+ :down {:schema/alter {:memory/src {:db/valueType :db.type/string :db/fulltext false}}}}

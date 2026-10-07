@@ -313,3 +313,42 @@
                 [0 0]
                 (all-memories conn user))]
     (if (zero? total) 0.0 (/ conforming (double total)))))
+
+;; ---------- search ----------
+
+(defn- ->search-row
+  "Shape a pulled memory and its relevance score into a search result row.
+  Unlike the recall wire, a search row carries a :score and never carries
+  related, because search follows no links."
+  [m score]
+  (let [tags (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))]
+    (cond-> {:id      (str (:memory/id m))
+             :content (:memory/content m)
+             :src     (:memory/src m)
+             :score   score}
+      (seq tags) (assoc :tags tags))))
+
+(defn search
+  "Return up to `limit` of `user`'s memories that best match the full-text
+  `query`, ranked by relevance, each carrying a :score. One ranked query covers
+  content and src. A `:doc-filter` restricts the scan to the caller's own
+  memories, so one user never sees another's and the fulltext :top is spent on
+  the caller's hits. A memory that matches in both fields returns two rows, so
+  the rows reduce to one score per entity, keeping the higher. Search follows no
+  related links. The result is a vector bounded by `limit`."
+  [conn user query limit]
+  (let [db   (d/db conn)
+        mine (set (all-eids db user))
+        rows (d/q '[:find ?e ?score
+                    :in $ ?q ?opts
+                    :where [(fulltext $ ?q ?opts) [[?e ?a ?v ?score]]]]
+                  ;; over-fetch: a memory can match in both content and src, and
+                  ;; the dedup below collapses that to one row, so fetch extra.
+                  db query {:display    :refs+scores
+                            :top        (* 3 limit)
+                            :doc-filter (fn [doc-ref] (contains? mine (first doc-ref)))})
+        best (reduce (fn [m [e s]] (update m e (fnil max 0.0) s)) {} rows)]
+    (->> best
+         (sort-by val >)
+         (take limit)
+         (mapv (fn [[e s]] (->search-row (d/pull db pull-pattern e) s))))))

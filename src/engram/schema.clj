@@ -24,6 +24,17 @@
 (def RecallBody
   [:map [:pairs [:vector config/Pair]]])
 
+;; /memories/search request. The search string is required and non-empty, so a
+;; missing or empty value coerces to 400. The handler also rejects a blank
+;; (whitespace) string. limit and categories are optional: the handler defaults
+;; limit to 20 and clamps it to 100, and projects the result tags to the named
+;; categories. A categories entry is a bare category string, not a pair.
+(def SearchBody
+  [:map
+   [:search [:string {:min 1}]]
+   [:limit {:optional true} [:int {:min 1}]]
+   [:categories {:optional true} [:vector :string]]])
+
 ;; A memory id on the wire: the string form of a UUID. Anchored, because malli
 ;; `:re` uses `re-find`. A non-uuid id is a malformed op -> 400 at coercion.
 (def IdStr
@@ -93,6 +104,17 @@
 ;; tuple [category label count lifetime recent]. The /stats envelope keeps its own
 ;; copy until ticket 08 moves the rows here.
 (def RecallsOut [:map [:recalls [:vector [:tuple :string :string :int :int number?]]]])
+;; /memories/search returns a bounded, ranked candidate list. Each row carries
+;; the memory id, src, content, a raw-double relevance score, and tags projected
+;; to the requested categories (the :tags key is absent when the client named no
+;; category or none match). Bounded by the client limit, so unlike the recall
+;; stream it can be response-coerced and shown in Swagger.
+(def SearchRow
+  [:map
+   [:id :string] [:src :string] [:content :string]
+   [:score number?]
+   [:tags {:optional true} [:vector [:tuple :string :string]]]])
+(def SearchOut [:map [:results [:vector SearchRow]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
 (def ErrorOut   [:map [:error :string]])
