@@ -70,12 +70,29 @@
         reject? #(config/tag-error (:tag-schema cfg) %)]
     (ndjson-response {:header true} (memory/nonconforming conn user reject?))))
 
+(defn- recall-row
+  "The positional recall-count row the wire carries: category, label, count,
+  lifetime, recent."
+  [{:keys [category label count lifetime recent]}]
+  [category label count lifetime recent])
+
+(defn- parse-categories
+  "Split a comma-separated `categories` parameter into a set, or nil when absent."
+  [s]
+  (when (seq s)
+    (not-empty (set (remove str/blank? (str/split s #","))))))
+
+(defn- recalls-handler [conn cfg req]
+  (let [user (:engram/user req)
+        cats (parse-categories (get-in req [:parameters :query :categories]))
+        rows (cond->> (stats/catalog conn user (:half-life-days cfg))
+               cats (filter (comp cats :category)))]
+    {:status 200 :body {:recalls (mapv recall-row rows)}}))
+
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
-     :body {:stats {:recalls (mapv (fn [{:keys [category label count lifetime recent]}]
-                                     [category label count lifetime recent])
-                                   (stats/catalog conn user (:half-life-days cfg)))
+     :body {:stats {:recalls (mapv recall-row (stats/catalog conn user (:half-life-days cfg)))
                     :link-density (stats/link-density conn user)}}}))
 
 (defn- reject-409
@@ -150,6 +167,9 @@
                                           (:categories cfg) (assoc :categories (:categories cfg)))})}}]
     ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
                       :handler (fn [req] (stats-handler conn cfg req))}}]
+    ["/recalls" {:get {:parameters {:query [:map [:categories {:optional true} :string]]}
+                       :responses  {200 {:body schema/RecallsOut}}
+                       :handler (fn [req] (recalls-handler conn cfg req))}}]
     ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall).
     ["/memories"       {:get  {:handler (fn [req] (memories-handler conn req))}
                         :post {:parameters {:body schema/CreateBody}

@@ -520,13 +520,14 @@
 ;; ---------- handler: auth, 409, streaming ----------
 
 (defn- request
-  [app method uri {:keys [user body accept]}]
+  [app method uri {:keys [user body accept query]}]
   (app (cond-> {:request-method method :uri uri
                 :headers (cond-> {}
                            user   (assoc "x-engram-user" user)
                            accept (assoc "accept" accept)
                            body   (assoc "content-type" "application/json"))}
-         body (assoc :body (io/input-stream (.getBytes (json/write-value-as-string body) "UTF-8"))))))
+         query (assoc :query-string query)
+         body  (assoc :body (io/input-stream (.getBytes (json/write-value-as-string body) "UTF-8"))))))
 
 (defn- body-json [resp]
   (json/read-value (slurp (:body resp)) json/keyword-keys-object-mapper))
@@ -801,6 +802,37 @@
         (testing "the two metrics are present and numeric"
           (is (== 0.5 (:avg-out-degree ld)))           ; one edge a->b over two nodes
           (is (== 1.0 (:largest-wcc-fraction ld)))))   ; {a,b} is the whole graph
+      (finally (d/close conn)))))
+
+(deftest handler-recalls-route
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (memory/create! conn "alice" {:content "m1" :src "a" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "clojure"] ["tech" "datalevin"]]})
+      (memory/create! conn "bob"   {:content "secret" :src "z" :tags [["domain" "haskell"]]})
+      (testing "a bare recalls map, no stats wrapper, five-element rows, user-scoped"
+        (let [resp (request app :get "/recalls" {:user "alice" :accept "application/json"})
+              body (body-json resp)]
+          (is (== 200 (:status resp)))
+          (is (vector? (:recalls body)))
+          (is (nil? (:stats body)))
+          (is (not (some #(= "haskell" (nth % 1)) (:recalls body))))      ; bob's label never appears
+          (let [row (first (filter #(= ["domain" "clojure"] [(nth % 0) (nth % 1)]) (:recalls body)))]
+            (is (== 5 (count row)))
+            (is (== 2 (nth row 2))))))                                    ; count: two alice memories carry the pair
+      (testing "a single-category filter returns only that category"
+        (let [cats (->> (request app :get "/recalls" {:user "alice" :accept "application/json" :query "categories=tech"})
+                        body-json :recalls (map first) set)]
+          (is (= #{"tech"} cats))))
+      (testing "a multi-category filter returns the union"
+        (let [cats (->> (request app :get "/recalls" {:user "alice" :accept "application/json" :query "categories=domain,tech"})
+                        body-json :recalls (map first) set)]
+          (is (= #{"domain" "tech"} cats))))
+      (testing "no filter returns every category"
+        (let [cats (->> (request app :get "/recalls" {:user "alice" :accept "application/json"})
+                        body-json :recalls (map first) set)]
+          (is (= #{"domain" "tech"} cats))))
       (finally (d/close conn)))))
 
 (deftest error-logging-and-correlation-id

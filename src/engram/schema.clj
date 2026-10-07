@@ -75,6 +75,10 @@
                  [:link-density [:map
                                  [:avg-out-degree number?]
                                  [:largest-wcc-fraction number?]]]]]])
+;; /recalls carries the bare recall rows with no :stats wrapper, each a positional
+;; tuple [category label count lifetime recent]. The /stats envelope keeps its own
+;; copy until ticket 08 moves the rows here.
+(def RecallsOut [:map [:recalls [:vector [:tuple :string :string :int :int number?]]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
 (def ErrorOut   [:map [:error :string]])
