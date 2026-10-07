@@ -288,6 +288,14 @@
   [conn user reject?]
   (filter #(reject? (:tags % [])) (all-memories conn user)))
 
+(defn fetch
+  "Return the caller's wire memory by id, or nil when no such memory exists for
+  this user. The read before a correction or a delete."
+  [conn user id]
+  (let [db (d/db conn)]
+    (when-let [eid (eid-of db user id)]
+      (->wire (d/pull db pull-pattern eid)))))
+
 (defn conforming-fraction
   "Return the fraction of the caller's memories that conform, as a raw double. A
   memory conforms when `reject?` returns a falsey value for its tags. The caller

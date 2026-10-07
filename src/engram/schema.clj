@@ -47,11 +47,13 @@
 
 ;; ---------- response schemas (malli coercion -> validated + swagger) ----------
 
+;; The recall wire shape. `->wire` omits an empty tags or related, so both are
+;; optional here; response coercion keeps a present one and tolerates an absent one.
 (def MemoryOut
   [:map
    [:id :string] [:content :string] [:src :string]
-   [:related [:vector :string]]
-   [:tags [:vector [:tuple :string :string]]]])
+   [:related {:optional true} [:vector :string]]
+   [:tags {:optional true} [:vector [:tuple :string :string]]]])
 
 ;; A configuration on the wire maps each category to a cardinality shorthand or a
 ;; value-set map. The map carries :cardinality and an optional :one-of vector of

@@ -225,6 +225,24 @@
         (is (== 0.0 (memory/conforming-fraction conn "nobody" reject?))))
       (finally (d/close conn)))))
 
+(deftest fetch-returns-owned-memory
+  (let [conn (fresh-conn)]
+    (try
+      (let [id (memory/create! conn "alice" {:content "x" :src "s"
+                                             :tags [["domain" "clojure"]] :related ["r"]})]
+        (testing "the owner gets the wire memory by id"
+          (let [m (memory/fetch conn "alice" id)]
+            (is (= id (:id m)))
+            (is (= "x" (:content m)))
+            (is (= "s" (:src m)))
+            (is (= [["domain" "clojure"]] (:tags m)))
+            (is (= ["r"] (:related m)))))
+        (testing "another user gets nil"
+          (is (nil? (memory/fetch conn "bob" id))))
+        (testing "a missing id gets nil"
+          (is (nil? (memory/fetch conn "alice" (str (java.util.UUID/randomUUID)))))))
+      (finally (d/close conn)))))
+
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
@@ -677,6 +695,30 @@
           (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper)))))
         (testing "only the caller's nonconforming memory appears"
           (is (= #{"bad"} srcs))))
+      (finally (d/close conn)))))
+
+(deftest handler-fetch-one
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (let [id (:id (body-json (request app :post "/memories"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})))]
+        (testing "the owner reads the memory by id"
+          (let [resp (request app :get (str "/memories/" id) {:user "alice" :accept "application/json"})
+                body (body-json resp)]
+            (is (== 200 (:status resp)))
+            (is (= id (:id body)))
+            (is (= "x" (:content body)))))
+        (testing "another user gets 404"
+          (is (== 404 (:status (request app :get (str "/memories/" id)
+                                        {:user "bob" :accept "application/json"})))))
+        (testing "a missing id gets 404"
+          (is (== 404 (:status (request app :get (str "/memories/" (java.util.UUID/randomUUID))
+                                        {:user "alice" :accept "application/json"})))))
+        (testing "a malformed id is a 400 coercion failure"
+          (is (== 400 (:status (request app :get "/memories/not-a-uuid"
+                                        {:user "alice" :accept "application/json"}))))))
       (finally (d/close conn)))))
 
 (deftest handler-delete

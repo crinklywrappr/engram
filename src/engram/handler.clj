@@ -131,6 +131,13 @@
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
 
+(defn- fetch-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:parameters :path :id])]
+    (if-let [m (memory/fetch conn user id)]
+      {:status 200 :body m}
+      {:status 404 :body {:error "not found"}})))
+
 (defn- delete-handler [conn req]
   (let [user (:engram/user req)
         id   (get-in req [:parameters :path :id])]
@@ -193,7 +200,10 @@
                                 :handler (fn [req] (recall-handler conn writer req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
-    ["/memories/:id"   {:put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/UpdateBody}
+    ["/memories/:id"   {:get    {:parameters {:path [:map [:id schema/IdStr]]}
+                                 :responses  {200 {:body schema/MemoryOut} 404 {:body schema/ErrorOut}}
+                                 :handler (fn [req] (fetch-handler conn req))}
+                        :put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/UpdateBody}
                                  :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut} 409 {:body schema/Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}
                         :delete {:parameters {:path [:map [:id schema/IdStr]]}
