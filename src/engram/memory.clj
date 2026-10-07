@@ -193,6 +193,16 @@
           {:ok? true :ids (:ids result) :applied (:applied result)})
       result)))
 
+;; ---------- fetch one ----------
+
+(defn fetch
+  "Return the caller's wire memory by id, or nil when no such memory exists for
+  this user. The read before a correction or a delete."
+  [conn user id]
+  (let [db (d/db conn)]
+    (when-let [eid (eid-of db user id)]
+      (->wire (d/pull db pull-pattern eid)))))
+
 ;; ---------- recall ----------
 
 (defn- eids-by-pair [db user [category label]]
@@ -278,6 +288,8 @@
     (map (fn [eid] (->wire (d/pull db pull-pattern eid)))
          (all-eids db user))))
 
+;; ---------- conformance ----------
+
 (defn nonconforming
   "Return a lazy seq of the caller's wire memories that `reject?` rejects.
   `reject?` takes a memory's tags (a vector of [category label] pairs, empty when
@@ -287,14 +299,6 @@
   realize it while `conn` is open."
   [conn user reject?]
   (filter #(reject? (:tags % [])) (all-memories conn user)))
-
-(defn fetch
-  "Return the caller's wire memory by id, or nil when no such memory exists for
-  this user. The read before a correction or a delete."
-  [conn user id]
-  (let [db (d/db conn)]
-    (when-let [eid (eid-of db user id)]
-      (->wire (d/pull db pull-pattern eid)))))
 
 (defn conforming-fraction
   "Return the fraction of the caller's memories that conform, as a raw double. A
