@@ -23,6 +23,13 @@
   [half-life-days elapsed-ms]
   (Math/pow 0.5 (/ (/ (double elapsed-ms) 86400000.0) (double half-life-days))))
 
+(defn- project-decayed
+  "Project a stored decayed weight to `clock`: the weight scaled by the decay
+  since its `last` recall, a stored last-request Date. The read and write paths
+  share this kernel; each caller keeps its own guard for a missing `last`."
+  [half-life-days decayed ^Date last clock]
+  (* (double decayed) (decay-factor half-life-days (- clock (.getTime last)))))
+
 (defn recalls
   "Return the caller's recall-count rows: lifetime and the recent decay count
   projected to now."
@@ -38,10 +45,9 @@
                        [?s :stat/decayed ?dec]
                        [?s :stat/last-request ?last]]
               db user)
-         (map (fn [[c l life dec ^Date last]]
+         (map (fn [[c l life decayed ^Date last]]
                 {:category c :label l :lifetime life
-                 :recent (* (double dec)
-                            (decay-factor half-life-days (- now-ms (.getTime last))))})))))
+                 :recent (project-decayed half-life-days decayed last now-ms)})))))
 
 (defn- pair-rows
   "Left-join the stat row onto every tag pair on the caller's memories. Return
@@ -90,12 +96,11 @@
   no-stat row is 0.0."
   [conn user half-life-days]
   (let [now-ms (System/currentTimeMillis)]
-    (mapv (fn [[c l n life dec last]]
+    (mapv (fn [[c l n life decayed last]]
             {:category c :label l :count n
              :lifetime (long life)
              :recent   (if (instance? Date last)
-                         (* (double dec)
-                            (decay-factor half-life-days (- now-ms (.getTime ^Date last))))
+                         (project-decayed half-life-days decayed last now-ms)
                          0.0)})
           (pair-rows (d/db conn) user))))
 
@@ -118,10 +123,9 @@
   `pair-counts` is empty. Take no connection and perform no write."
   [db user half-life-days pair-counts flush-ms]
   (mapv (fn [[[c l] n]]
-          (let [[life dec ^Date last] (extant-recalls db user c l)
+          (let [[life decayed ^Date last] (extant-recalls db user c l)
                 base (if last
-                       (* (double dec)
-                          (decay-factor half-life-days (- flush-ms (.getTime last))))
+                       (project-decayed half-life-days decayed last flush-ms)
                        0.0)]
             {:stat/user user :stat/category c :stat/label l
              :stat/lifetime (+ (long (or life 0)) (long n))

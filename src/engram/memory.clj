@@ -15,13 +15,18 @@
   '[:memory/id :memory/content :memory/src :memory/related
     {:memory/tag [:tag/category :tag/label]}])
 
+(defn- tag-tuples
+  "Reshape a pulled memory's component tags into [category label] wire tuples."
+  [m]
+  (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m)))
+
 (defn- ->wire
   "Shape a pulled memory into the JSON wire form. Omit an empty tags vector and
   an empty related vector, so a bare memory carries no empty key on the recall
   wire. The recall path carries no timestamps."
   [m]
   (let [related (vec (:memory/related m))
-        tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))]
+        tags    (tag-tuples m)]
     (cond-> {:id      (str (:memory/id m))
              :content (:memory/content m)
              :src     (:memory/src m)}
@@ -205,30 +210,34 @@
 
 ;; ---------- recall ----------
 
+;; Datalog rule: bind ?r to each related src of ?e, or to :none when ?e has none.
+;; :none is the no-related sentinel, never a real src. The three recall lookups
+;; share it, so the related-closure fragment lives in one place.
+(def ^:private related-rules
+  '[[(related-or-none ?e ?r)
+     [?e :memory/related ?r]]
+    [(related-or-none ?e ?r)
+     (not-join [?e] [?e :memory/related _])
+     [(ground :none) ?r]]])
+
 (defn- eids-by-pair [db user [category label]]
   (d/q '[:find ?e (distinct ?r)
-         :in $ ?u ?c ?l
+         :in $ % ?u ?c ?l
          :where [?e :memory/user ?u]
                 [?e :memory/tag ?t]
                 [?t :tag/category ?c]
                 [?t :tag/label ?l]
-         (or-join [?e ?r]
-                  [?e :memory/related ?r]
-                  (and (not-join [?e] [?e :memory/related _])
-                       [(ground :none) ?r]))]
-       db user category label))
+                (related-or-none ?e ?r)]
+       db related-rules user category label))
 
 (defn- eids-by-srcs [db user srcs]
   (if (seq srcs)
     (d/q '[:find ?e (distinct ?r)
-           :in $ ?u [?s ...]
+           :in $ % ?u [?s ...]
            :where [?e :memory/user ?u]
                   [?e :memory/src ?s]
-           (or-join [?e ?r]
-                    [?e :memory/related ?r]
-                    (and (not-join [?e] [?e :memory/related _])
-                         [(ground :none) ?r]))]
-         db user (vec srcs))
+                  (related-or-none ?e ?r)]
+         db related-rules user (vec srcs))
     []))
 
 (defn- query
@@ -273,14 +282,11 @@
 (defn- eids-by-ids [db user ids]
   (if (seq ids)
     (d/q '[:find ?e (distinct ?r)
-           :in $ ?u [?id ...]
+           :in $ % ?u [?id ...]
            :where [?e :memory/id ?id]
                   [?e :memory/user ?u]
-           (or-join [?e ?r]
-                    [?e :memory/related ?r]
-                    (and (not-join [?e] [?e :memory/related _])
-                         [(ground :none) ?r]))]
-         db user (vec ids))
+                  (related-or-none ?e ?r)]
+         db related-rules user (vec ids))
     []))
 
 (defn recall-by-ids
@@ -348,7 +354,7 @@
   Unlike the recall wire, a search row carries a :score and never carries
   related, because search follows no links."
   [m score]
-  (let [tags (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))]
+  (let [tags (tag-tuples m)]
     (cond-> {:id      (str (:memory/id m))
              :content (:memory/content m)
              :src     (:memory/src m)
