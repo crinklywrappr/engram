@@ -30,24 +30,30 @@
   [half-life-days decayed ^Date last clock]
   (* (double decayed) (decay-factor half-life-days (- clock (.getTime last)))))
 
+(defn- stat-rows
+  "The caller's raw stat rows [category label lifetime decayed last-request], one
+  per stored (user, category, label). Every stored row, unlike `pair-rows`, which
+  lists only the pairs a memory still carries."
+  [db user]
+  (d/q '[:find ?c ?l ?life ?dec ?last
+         :in $ ?u
+         :where [?s :stat/user ?u]
+                [?s :stat/category ?c]
+                [?s :stat/label ?l]
+                [?s :stat/lifetime ?life]
+                [?s :stat/decayed ?dec]
+                [?s :stat/last-request ?last]]
+       db user))
+
 (defn recalls
   "Return the caller's recall-count rows: lifetime and the recent decay count
   projected to now."
   [conn user half-life-days]
-  (let [db     (d/db conn)
-        now-ms (System/currentTimeMillis)]
-    (->> (d/q '[:find ?c ?l ?life ?dec ?last
-                :in $ ?u
-                :where [?s :stat/user ?u]
-                       [?s :stat/category ?c]
-                       [?s :stat/label ?l]
-                       [?s :stat/lifetime ?life]
-                       [?s :stat/decayed ?dec]
-                       [?s :stat/last-request ?last]]
-              db user)
-         (map (fn [[c l life decayed ^Date last]]
-                {:category c :label l :lifetime life
-                 :recent (project-decayed half-life-days decayed last now-ms)})))))
+  (let [now-ms (System/currentTimeMillis)]
+    (map (fn [[c l life decayed ^Date last]]
+           {:category c :label l :lifetime life
+            :recent (project-decayed half-life-days decayed last now-ms)})
+         (stat-rows (d/db conn) user))))
 
 (defn- pair-rows
   "Left-join the stat row onto every tag pair on the caller's memories. Return
