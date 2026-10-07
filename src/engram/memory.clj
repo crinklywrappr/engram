@@ -287,3 +287,17 @@
   realize it while `conn` is open."
   [conn user reject?]
   (filter #(reject? (:tags % [])) (all-memories conn user)))
+
+(defn conforming-fraction
+  "Return the fraction of the caller's memories that conform, as a raw double. A
+  memory conforms when `reject?` returns a falsey value for its tags. The caller
+  injects the conformance check, as with `nonconforming`. The value is 0.0 when
+  the caller owns no memory. One reduce over the all-memories stream, the seam a
+  later freshness pass can extend."
+  [conn user reject?]
+  (let [[total conforming]
+        (reduce (fn [[t c] m]
+                  [(inc t) (if (reject? (:tags m [])) c (inc c))])
+                [0 0]
+                (all-memories conn user))]
+    (if (zero? total) 0.0 (/ conforming (double total)))))

@@ -65,10 +65,15 @@
   (let [user (:engram/user req)]
     (ndjson-response {:header true} (memory/all-memories conn user))))
 
+(defn- tag-reject
+  "The conformance reject predicate for `cfg`: nil when a tag set conforms, an
+  error map when it does not."
+  [cfg]
+  (fn [tags] (config/tag-error (:tag-schema cfg) tags)))
+
 (defn- nonconforming-handler [conn cfg req]
-  (let [user    (:engram/user req)
-        reject? #(config/tag-error (:tag-schema cfg) %)]
-    (ndjson-response {:header true} (memory/nonconforming conn user reject?))))
+  (let [user (:engram/user req)]
+    (ndjson-response {:header true} (memory/nonconforming conn user (tag-reject cfg)))))
 
 (defn- recall-row
   "The positional recall-count row the wire carries: category, label, count,
@@ -89,10 +94,16 @@
                cats (filter (comp cats :category)))]
     {:status 200 :body {:recalls (mapv recall-row rows)}}))
 
+(defn- trunc4
+  "Truncate a number to four decimal places, no rounding."
+  [x]
+  (/ (Math/floor (* (double x) 10000.0)) 10000.0))
+
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
-     :body {:stats {:link-density (stats/link-density conn user)}}}))
+     :body {:stats {:link-density       (stats/link-density conn user)
+                    :conforming-fraction (trunc4 (memory/conforming-fraction conn user (tag-reject cfg)))}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations

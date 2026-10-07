@@ -180,6 +180,21 @@
           (is (not (contains? srcs "zz")))))
       (finally (d/close conn)))))
 
+(deftest conforming-fraction-counts-conforming-over-total
+  (let [conn    (fresh-conn)
+        reject? #(config/tag-error (:tag-schema cfg) %)]
+    (try
+      (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "c2" :src "c2" :tags [["domain" "databases"]]})
+      (memory/create! conn "alice" {:content "c3" :src "c3" :tags [["domain" "clojure"] ["tech" "datalevin"]]})
+      (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})  ; no domain
+      (memory/create! conn "bob"   {:content "zz" :src "zz" :tags [["tech" "datalevin"]]})      ; other user
+      (testing "the fraction is conforming over total, for the caller only"
+        (is (== 0.75 (memory/conforming-fraction conn "alice" reject?))))   ; 3 of 4 conform
+      (testing "a user with no memories gets 0.0"
+        (is (== 0.0 (memory/conforming-fraction conn "nobody" reject?))))
+      (finally (d/close conn)))))
+
 (deftest delete-removes-memory
   (let [conn (fresh-conn)]
     (try
@@ -783,6 +798,20 @@
         (testing "the two metrics are present and numeric"
           (is (== 0.5 (:avg-out-degree ld)))           ; one edge a->b over two nodes
           (is (== 1.0 (:largest-wcc-fraction ld)))))   ; {a,b} is the whole graph
+      (finally (d/close conn)))))
+
+(deftest handler-stats-conforming-fraction
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      ;; two conforming, one not: 2/3 = 0.6666... truncated to four decimals
+      (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "c2" :src "c2" :tags [["domain" "databases"]]})
+      (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})
+      (let [body (body-json (request app :get "/stats" {:user "alice" :accept "application/json"}))
+            f    (get-in body [:stats :conforming-fraction])]
+        (testing "the stats body carries the conforming fraction, truncated to four decimals"
+          (is (== 0.6666 f))))
       (finally (d/close conn)))))
 
 (deftest handler-recalls-route

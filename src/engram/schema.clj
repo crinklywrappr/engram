@@ -67,11 +67,14 @@
 ;; breaking the envelope. The recall rows moved to /recalls, so :stats no longer
 ;; carries them. :link-density is the mean src out-degree and the largest
 ;; weakly-connected component as a fraction of the src nodes.
+;; :conforming-fraction is the share of the caller's memories that satisfy a
+;; configuration, a single decimal truncated to four places.
 (def StatsOut
   [:map [:stats [:map
                  [:link-density [:map
                                  [:avg-out-degree number?]
-                                 [:largest-wcc-fraction number?]]]]]])
+                                 [:largest-wcc-fraction number?]]]
+                 [:conforming-fraction number?]]]])
 ;; /recalls carries the bare recall rows with no :stats wrapper, each a positional
 ;; tuple [category label count lifetime recent]. The /stats envelope keeps its own
 ;; copy until ticket 08 moves the rows here.
