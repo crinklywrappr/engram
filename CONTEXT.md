@@ -66,7 +66,9 @@ nonconforming route and the `/conform` skill read these.
 _Avoid_: invalid, malformed, bad
 
 **Cardinality**:
-How many labels of a category a memory can carry: `1`, `?`, `*`, or `+`.
+How many labels of a category a memory can carry: `1`, `?`, `*`, or `+`. A category
+can instead take a map `{:cardinality "?" :one-of [...]}` that closes its labels to
+the `:one-of` set.
 _Avoid_: multiplicity, arity
 
 **User**:

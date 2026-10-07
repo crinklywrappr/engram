@@ -82,6 +82,36 @@
       (let [c (assoc base :categories {"framework" {:description "web stack"}})]
         (is (thrown? clojure.lang.ExceptionInfo (config/validate-config c)))))))
 
+(deftest one-of-restricts-labels
+  (let [schema (config/compile-tag-schema
+                {:configurations [{"scope" {:cardinality "1" :one-of ["global" "project"]}
+                                   "domain" "+"}]})]
+    (testing "a label in the :one-of set conforms"
+      (is (nil? (config/tag-error schema [["scope" "global"] ["domain" "clojure"]]))))
+    (testing "a valid token outside the :one-of set fails"
+      (is (= errors/no-configuration
+             (:code (config/tag-error schema [["scope" "other"] ["domain" "clojure"]])))))
+    (testing "the map's cardinality still applies, so a missing scope fails"
+      (is (= errors/no-configuration
+             (:code (config/tag-error schema [["domain" "clojure"]])))))))
+
+(deftest validate-config-rejects-bad-value-set
+  (testing "a category map without :cardinality is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:configurations [{"scope" {:one-of ["global"]}}]}))))
+  (testing "a non-token :one-of label is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:configurations [{"scope" {:cardinality "?" :one-of ["Global"]}}]}))))
+  (testing "an unknown cardinality is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:configurations [{"scope" {:cardinality "x" :one-of ["global"]}}]}))))
+  (testing "an empty :one-of is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:configurations [{"scope" {:cardinality "?" :one-of []}}]}))))
+  (testing "a well-formed value-set map passes unchanged"
+    (let [c {:configurations [{"scope" {:cardinality "?" :one-of ["global" "project"]} "domain" "+"}]}]
+      (is (= c (config/validate-config c))))))
+
 ;; ---------- memory: create, transitive recall, isolation ----------
 
 (deftest transitive-recall-and-isolation
@@ -843,6 +873,20 @@
         (let [cats (->> (request app :get "/recalls" {:user "alice" :accept "application/json"})
                         body-json :recalls (map first) set)]
           (is (= #{"domain" "tech"} cats))))
+      (finally (d/close conn)))))
+
+(deftest handler-config-carries-value-set
+  (let [raw  {:half-life-days 14
+              :configurations [{"scope" {:cardinality "?" :one-of ["global" "project"]} "domain" "+"}]}
+        c    (assoc raw :tag-schema (config/compile-tag-schema raw))
+        conn (fresh-conn)
+        app  (handler/app conn c (stat-writer/writer conn 14))]
+    (try
+      (let [body  (body-json (request app :get "/config" {:user "alice" :accept "application/json"}))
+            scope (get-in body [:configurations 0 :scope])]
+        (testing "GET /config carries the map form for a value-set category"
+          (is (= "?" (:cardinality scope)))
+          (is (= ["global" "project"] (:one-of scope)))))
       (finally (d/close conn)))))
 
 (deftest error-logging-and-correlation-id

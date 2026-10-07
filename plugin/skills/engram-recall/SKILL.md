@@ -52,6 +52,10 @@ The cardinality says how many labels of a category a memory carries:
 - `*` zero or more
 - `+` one or more
 
+A category can instead be a map, `{"cardinality": "?", "one-of": ["global",
+"project"]}`. The `one-of` list closes that category's labels to its tokens. Pick
+a label from the list for that category.
+
 When the admin describes the categories, the body also carries a `categories`
 map. Each entry gives one category a `description` and a vector of `examples`.
 Read them to pick labels that match how the admin means each category.

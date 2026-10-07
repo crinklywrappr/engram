@@ -7,6 +7,10 @@
 ;; pairs satisfy ANY ONE configuration. Categories are closed to what appears
 ;; here. Labels are open vocabulary but must be lowercase kebab-case.
 ;;
+;; A category can instead take a map {:cardinality "?" :one-of ["global" "project"]}.
+;; :cardinality is required. :one-of is optional and closes that category's labels
+;; to the listed lowercase kebab-case tokens, inside this configuration only.
+;;
 ;; src (exactly one) and related (zero or more) are imposed by the server and
 ;; must NOT appear here.
 ;;
@@ -31,4 +35,9 @@
   "status"   {:description "a life-cycle state, when one applies"
               :examples ["shipped" "deferred" "resolved"]}}
  :configurations
- [{"scope" "?" "domain" "+" "project" "*" "tech" "*" "activity" "*" "status" "?"}]}
+ [{"scope"    {:cardinality "?" :one-of ["global" "project"]}
+   "domain"   "+"
+   "project"  "*"
+   "tech"     "*"
+   "activity" "*"
+   "status"   "?"}]}

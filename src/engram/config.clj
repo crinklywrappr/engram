@@ -11,14 +11,24 @@
   kebab-case tokens (`Token`), checked at the route boundary by request coercion."
   (:require [clojure.edn :as edn]
             [engram.errors :as errors]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [malli.error :as me]))
 
 ;; A token is lowercase kebab-case that also reads as a Clojure keyword literal:
 ;; a lowercase letter, then lowercase letters or digits in hyphen-joined words.
 ;; The regex is anchored because malli `:re` uses `re-find`, not `re-matches`.
 (def token-regex #"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-(def Token [:re token-regex])
+(def Token [:re {:error/message "should be a lowercase kebab-case token"} token-regex])
 (def Pair [:tuple Token Token])                 ; a [category label] pair
+
+;; A configuration maps each category to a cardinality shorthand, or to a
+;; value-set map {:cardinality shorthand :one-of [label ...]} that closes the
+;; category's labels to the :one-of set. `card-of` reads the shorthand from either.
+(defn- card-of
+  "The cardinality shorthand of a category value: the value itself when it is a
+  shorthand string, or its :cardinality when it is a value-set map."
+  [v]
+  (if (map? v) (:cardinality v) v))
 
 ;; An admin may describe each category. The :categories map is optional. Each
 ;; entry gives one category an optional description (<=256 chars) and an optional
@@ -29,6 +39,19 @@
    [:map
     [:description {:optional true} [:string {:max 256}]]
     [:examples {:optional true} [:vector Token]]]])
+
+;; The shape of an admin configuration value, checked at load. A value is a
+;; cardinality shorthand, or a closed map with that shorthand and an optional
+;; non-empty :one-of vector of label tokens. A closed map rejects a stray key.
+;; `:multi` dispatches on the value's type, so a malformed map reports the map's
+;; own error rather than collapsing to the shorthand branch.
+(def Cardinality [:enum "1" "?" "*" "+"])
+(def CategorySpec
+  [:multi {:dispatch (fn [v] (if (map? v) :map :shorthand))}
+   [:shorthand Cardinality]
+   [:map [:map {:closed true}
+          [:cardinality Cardinality]
+          [:one-of {:optional true} [:vector {:min 1} Token]]]]])
 
 (defn valid-token?
   "True when `s` is a lowercase kebab-case token. The user id is held to this
@@ -48,15 +71,20 @@
   (into #{} (mapcat keys) (:configurations config)))
 
 (defn validate-config
-  "Return `config` when valid, else throw. The :categories map is optional. When
-  present, it must match the Categories shape, and every described category must
-  appear in some configuration, because describing an unused category is a
-  mistake."
+  "Return `config` when valid, else throw. The :configurations must match a vector
+  of category-to-`CategorySpec` maps, so each category value is a cardinality
+  shorthand or a value-set map. The :categories map is optional. When present, it
+  must match the Categories shape, and every described category must appear in some
+  configuration, because describing an unused category is a mistake."
   [config]
+  (let [schema [:vector [:map-of :string CategorySpec]]]
+    (when-not (m/validate schema (:configurations config))
+      (throw (ex-info "config :configurations is malformed"
+                      {:errors (me/humanize (m/explain schema (:configurations config)))}))))
   (when-let [cats (:categories config)]
     (when-not (m/validate Categories cats)
       (throw (ex-info "config :categories is malformed"
-                      {:errors (m/explain Categories cats)})))
+                      {:errors (me/humanize (m/explain Categories cats))})))
     (let [unknown (remove (configured-categories config) (keys cats))]
       (when (seq unknown)
         (throw (ex-info "config :categories names categories absent from :configurations"
@@ -68,21 +96,32 @@
   [default-path]
   (validate-config (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path)))))
 
-(defn- cardinality->vector [card]
+(defn- element-of
+  "The vector element schema of a category value: an enum of the :one-of labels
+  when the map carries them, else any Token."
+  [v]
+  (if-let [one-of (and (map? v) (:one-of v))]
+    (into [:enum] one-of)
+    Token))
+
+(defn- card->vector [card element]
   (case card
-    "1" [:vector {:min 1 :max 1} Token]
-    "?" [:vector {:max 1} Token]
-    "*" [:vector Token]
-    "+" [:vector {:min 1} Token]))
+    "1" [:vector {:min 1 :max 1} element]
+    "?" [:vector {:max 1} element]
+    "*" [:vector element]
+    "+" [:vector {:min 1} element]))
 
 (defn- configuration->schema
-  "One closed map schema for a configuration. A category is a required key for
-  cardinality `1` or `+`, and an optional key for `?` or `*`."
+  "One closed map schema for a configuration. A category value is a cardinality
+  shorthand or a value-set map. A category is a required key for cardinality `1`
+  or `+`, and an optional key for `?` or `*`. A :one-of map limits the category's
+  labels to an enum of its set."
   [configuration]
   (into [:map {:closed true}]
-        (map (fn [[category card]]
-               [category (if (#{"1" "+"} card) {} {:optional true})
-                (cardinality->vector card)])
+        (map (fn [[category v]]
+               (let [card (card-of v)]
+                 [category (if (#{"1" "+"} card) {} {:optional true})
+                  (card->vector card (element-of v))]))
              configuration)))
 
 (defn compile-tag-schema

@@ -53,12 +53,24 @@
    [:related [:vector :string]]
    [:tags [:vector [:tuple :string :string]]]])
 
+;; A configuration on the wire maps each category to a cardinality shorthand or a
+;; value-set map. The map carries :cardinality and an optional :one-of vector of
+;; acceptable labels (ticket 10). Response coercion strips unnamed keys, so both
+;; map keys are named.
+(def Configuration
+  [:map-of :string
+   [:or :string
+    [:map
+     [:cardinality :string]
+     [:one-of {:optional true} [:vector :string]]]]])
+(def Configurations [:vector Configuration])
+
 ;; /config carries the configurations and, when the admin describes them, the
 ;; optional :categories map. Response coercion strips undeclared keys, so both
 ;; are named here.
 (def ConfigOut
   [:map
-   [:configurations [:vector [:map-of :string :string]]]
+   [:configurations Configurations]
    [:categories {:optional true}
     [:map-of :string [:map
                       [:description {:optional true} :string]
@@ -85,7 +97,7 @@
 ;; 409 keeps :configurations so the client can refresh; coercion strips undeclared
 ;; keys, so the schema must name every key the body carries.
 (def Conflict   [:map [:error :string] [:message :string]
-                       [:configurations [:vector [:map-of :string :string]]]])
+                       [:configurations Configurations]])
 ;; The NDJSON recall is a stream, which response coercion cannot check, so the
 ;; recall route declares no :responses. This is the JSON fallback shape.
 (def RecallOut   [:map [:pairs [:vector [:tuple :string :string]]]
@@ -98,4 +110,4 @@
   [:map [:errors [:vector [:map
                            [:i :int] [:op :string] [:error :string]
                            [:message {:optional true} :string]
-                           [:configurations {:optional true} [:vector [:map-of :string :string]]]]]]])
+                           [:configurations {:optional true} Configurations]]]]])
