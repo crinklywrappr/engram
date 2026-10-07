@@ -39,9 +39,9 @@ The value of a tag, for example `clojure`. Labels are open vocabulary and
 lowercase kebab-case.
 _Avoid_: value, tag-value
 
-**category:label pair**:
+**Tag**:
 One tag on a memory: a category paired with a label, for example `domain:clojure`.
-_Avoid_: tag (when it means the pair)
+The structural spelling "category:label pair" names the two parts.
 
 **src**:
 The identity of the source a fact came from. Exactly one per memory. Facts split

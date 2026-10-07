@@ -21,8 +21,8 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
-(def RecallByPairsBody
-  [:map [:pairs [:vector config/Pair]]])
+(def RecallByTagsBody
+  [:map [:tags [:vector config/Pair]]])
 
 ;; /memories/search request. The search string is required and non-empty, so a
 ;; missing or empty value coerces to 400. The handler also rejects a blank
@@ -130,7 +130,7 @@
                        [:configurations Configurations]])
 ;; The NDJSON recall is a stream, which response coercion cannot check, so the
 ;; recall route declares no :responses. This is the JSON fallback shape.
-(def RecallOut   [:map [:pairs [:vector [:tuple :string :string]]]
+(def RecallOut   [:map [:tags [:vector [:tuple :string :string]]]
                       [:memories [:vector MemoryOut]]])
 ;; A passed batch echoes the new ids in create order plus an applied count. A
 ;; rejected batch reports only the failing ops; declare every key an entry can

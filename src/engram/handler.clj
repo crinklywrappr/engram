@@ -53,13 +53,13 @@
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
 (defn- recall-handler [conn writer req]
-  (let [user  (:engram/user req)
-        pairs (get-in req [:parameters :body :pairs])]
-    (stat-writer/record! writer user pairs)
-    (let [mems (memory/recall-by-pairs conn user pairs)]
+  (let [user (:engram/user req)
+        tags (get-in req [:parameters :body :tags])]
+    (stat-writer/record! writer user tags)
+    (let [mems (memory/recall-by-tags conn user tags)]
       (if (wants-ndjson? req)
-        (ndjson-response {:header true :pairs pairs} mems)
-        {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
+        (ndjson-response {:header true :tags tags} mems)
+        {:status 200 :body {:tags tags :memories (vec mems)}}))))
 
 (defn- recall-by-ids-handler [conn req]
   (let [user (:engram/user req)
@@ -224,7 +224,7 @@
     ;; A recall selects either by category:label pairs (by-tags) or by a list of
     ;; ids (by-ids). No :responses: the NDJSON stream cannot be response-coerced
     ;; (see schema/RecallOut). Both are static paths, resolving ahead of /memories/:id.
-    ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByPairsBody}
+    ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByTagsBody}
                                         :handler (fn [req] (recall-handler conn writer req))}}]
     ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
                                        :handler (fn [req] (recall-by-ids-handler conn req))}}]

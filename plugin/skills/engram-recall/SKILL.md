@@ -31,7 +31,7 @@ Examples:
 ```bash
 ssh engram GET /config < /dev/null
 ssh engram GET /recalls < /dev/null
-echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall/by-tags
+echo '{"tags":[["domain","clojure"]]}' | ssh engram POST /memories/recall/by-tags
 echo '{"search":"deploy to the pi","limit":20}' | ssh engram POST /memories/search
 echo '{"ids":["<uuid>"]}' | ssh engram POST /memories/recall/by-ids
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
@@ -79,7 +79,7 @@ Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
    many of your memories carry the pair. A pair you never recalled still appears,
    with a lifetime of 0 and a recent of 0.0. Use the count, the lifetime, and the
    recent value to choose the pairs worth loading.
-2. `POST /memories/recall/by-tags` with `{"pairs": [["category","label"], ...]}`
+2. `POST /memories/recall/by-tags` with `{"tags": [["category","label"], ...]}`
    returns the matching memories plus their related closure. Read every line after
    the header line.
 

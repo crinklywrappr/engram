@@ -220,7 +220,7 @@
      (not-join [?e] [?e :memory/related _])
      [(ground :none) ?r]]])
 
-(defn- eids-by-pair [db user [category label]]
+(defn- eids-by-tag [db user [category label]]
   (d/q '[:find ?e (distinct ?r)
          :in $ % ?u ?c ?l
          :where [?e :memory/user ?u]
@@ -270,14 +270,14 @@
                               ;; :none is the no-related sentinel, never a real src
                               (disj frontier :none)]))))
 
-(defn recall-by-pairs
-  "Return a lazy seq of wire memories: the pair matches for `user` plus the
+(defn recall-by-tags
+  "Return a lazy seq of wire memories: the tag matches for `user` plus the
   transitive related-by-src closure, deduped. Responses are not truncated. The
   seq is lazy over an immutable db snapshot, so realize it while `conn` is open."
-  [conn user pairs]
+  [conn user tags]
   (let [db (d/db conn)
-        f (partial eids-by-pair db user)]
-    (query db user #{} [] #{} (map (partial vector f) pairs))))
+        f (partial eids-by-tag db user)]
+    (query db user #{} [] #{} (map (partial vector f) tags))))
 
 (defn- eids-by-ids [db user ids]
   (if (seq ids)
