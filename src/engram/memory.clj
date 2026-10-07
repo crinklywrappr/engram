@@ -261,7 +261,7 @@
                               ;; :none is the no-related sentinel, never a real src
                               (disj frontier :none)]))))
 
-(defn recall
+(defn recall-by-pairs
   "Return a lazy seq of wire memories: the pair matches for `user` plus the
   transitive related-by-src closure, deduped. Responses are not truncated. The
   seq is lazy over an immutable db snapshot, so realize it while `conn` is open."
@@ -269,6 +269,33 @@
   (let [db (d/db conn)
         f (partial eids-by-pair db user)]
     (query db user #{} [] #{} (map (partial vector f) pairs))))
+
+(defn- eids-by-ids [db user ids]
+  (if (seq ids)
+    (d/q '[:find ?e (distinct ?r)
+           :in $ ?u [?id ...]
+           :where [?e :memory/id ?id]
+                  [?e :memory/user ?u]
+           (or-join [?e ?r]
+                    [?e :memory/related ?r]
+                    (and (not-join [?e] [?e :memory/related _])
+                         [(ground :none) ?r]))]
+         db user (vec ids))
+    []))
+
+(defn recall-by-ids
+  "Return a lazy seq of wire memories: the memories `user` owns among `ids` plus
+  the transitive related-by-src closure, deduped. An id that is not the caller's
+  or does not exist is skipped, because the match joins on the caller's user. A
+  duplicate id collapses to one memory, the dedup the closure walk performs. An
+  empty `ids` selects nothing. `ids` are uuid strings. Responses are not
+  truncated. The seq is lazy over an immutable db snapshot, so realize it while
+  `conn` is open."
+  [conn user ids]
+  (let [db    (d/db conn)
+        uuids (mapv #(UUID/fromString %) ids)
+        f     (partial eids-by-ids db user)]
+    (query db user #{} [] #{} [[f uuids]])))
 
 ;; ---------- list all ----------
 

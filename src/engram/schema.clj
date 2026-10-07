@@ -21,7 +21,7 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
-(def RecallBody
+(def RecallByPairsBody
   [:map [:pairs [:vector config/Pair]]])
 
 ;; /memories/search request. The search string is required and non-empty, so a
@@ -39,6 +39,12 @@
 ;; `:re` uses `re-find`. A non-uuid id is a malformed op -> 400 at coercion.
 (def IdStr
   [:re #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"])
+
+;; /memories/recall/by-ids request. A recall selected by a list of memory ids.
+;; Each id is the IdStr form, so a non-uuid id is a 400 at coercion. An empty
+;; vector is well-formed and selects nothing.
+(def RecallByIdsBody
+  [:map [:ids [:vector IdStr]]])
 
 (def UpdatePayload
   [:map

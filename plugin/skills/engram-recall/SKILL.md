@@ -31,13 +31,14 @@ Examples:
 ```bash
 ssh engram GET /config < /dev/null
 ssh engram GET /recalls < /dev/null
-echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall
+echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall/by-tags
 echo '{"search":"deploy to the pi","limit":20}' | ssh engram POST /memories/search
+echo '{"ids":["<uuid>"]}' | ssh engram POST /memories/recall/by-ids
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
 ```
 
-The recall call streams NDJSON: the first line is a header object, and every line
-after it is one memory.
+A recall streams NDJSON: the first line is a header object, and every line after
+it is one memory.
 
 ## Session start: load the configuration once
 
@@ -61,7 +62,16 @@ When the admin describes the categories, the body also carries a `categories`
 map. Each entry gives one category a `description` and a vector of `examples`.
 Read them to pick labels that match how the admin means each category.
 
-## Recall: two calls
+## Recall: load memories plus their links
+
+A recall loads the memories you select plus every memory linked to them through
+`related`, followed across hops. You select the memories two ways: by their
+category:label pairs, or by a list of ids a search returned.
+
+Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
+`related` appear too.
+
+### Recall by pairs: two calls
 
 1. `ssh engram GET /recalls` returns one row for every category:label pair on your
    memories. The body is `{"recalls": [ ... ]}`. Each entry is a
@@ -69,26 +79,27 @@ Read them to pick labels that match how the admin means each category.
    many of your memories carry the pair. A pair you never recalled still appears,
    with a lifetime of 0 and a recent of 0.0. Use the count, the lifetime, and the
    recent value to choose the pairs worth loading.
-2. `POST /memories/recall` with `{"pairs": [["category","label"], ...]}` returns
-   the matching memories plus every memory linked to them through `related`,
-   followed transitively. Read every line after the header line.
+2. `POST /memories/recall/by-tags` with `{"pairs": [["category","label"], ...]}`
+   returns the matching memories plus their related closure. Read every line after
+   the header line.
 
-Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
-`related` appear too.
+### Search, then recall by ids: the recovery path
 
-## Search: the recovery path
+When a recall by pairs does not surface a fact, search for it, then load what you
+find. This is a two-step path.
 
-Search finds a fact that a recall by pairs does not surface. `POST
-/memories/search` runs one ranked full-text query over content and src. The body
-is `{"search": "...", "limit": 20, "categories": ["domain"]}`. Only `search` is
-required. `limit` defaults to 20 and caps at 100. A larger `limit` clamps to 100.
-
-The response is `{"results": [ ... ]}`, ranked by relevance. Each row carries
-`id`, `src`, `content`, and a `score`. A row carries `tags` only for the
-categories you name. A body that names no categories returns no `tags`.
-
-Search follows no related links. Read the candidates and choose the ones that
-matter.
+1. `POST /memories/search` runs one ranked full-text query over content and src.
+   The body is `{"search": "...", "limit": 20, "categories": ["domain"]}`. Only
+   `search` is required. `limit` defaults to 20 and caps at 100. A larger `limit`
+   clamps to 100. The response is `{"results": [ ... ]}`, ranked by relevance.
+   Each row carries `id`, `src`, `content`, and a `score`. A row carries `tags`
+   only for the categories you name. A body that names no categories returns no
+   `tags`. Search follows no related links. It is the discovery step: read the
+   candidates and choose the ids that matter.
+2. `POST /memories/recall/by-ids` with `{"ids": ["<uuid>", ...]}` loads those
+   memories in full plus their related closure, as the same NDJSON stream. A
+   row carries no score. An id that is not yours, or does not exist, is skipped.
+   An empty `ids` list returns a header line and no memories.
 
 ## Store a fact
 

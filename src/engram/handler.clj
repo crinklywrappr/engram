@@ -56,10 +56,18 @@
   (let [user  (:engram/user req)
         pairs (get-in req [:parameters :body :pairs])]
     (stat-writer/record! writer user pairs)
-    (let [mems (memory/recall conn user pairs)]
+    (let [mems (memory/recall-by-pairs conn user pairs)]
       (if (wants-ndjson? req)
         (ndjson-response {:header true :pairs pairs} mems)
         {:status 200 :body {:pairs pairs :memories (vec mems)}}))))
+
+(defn- recall-by-ids-handler [conn req]
+  (let [user (:engram/user req)
+        ids  (get-in req [:parameters :body :ids])
+        mems (memory/recall-by-ids conn user ids)]
+    (if (wants-ndjson? req)
+      (ndjson-response {:header true :ids ids} mems)
+      {:status 200 :body {:ids ids :memories (vec mems)}})))
 
 (defn- memories-handler [conn req]
   (let [user (:engram/user req)]
@@ -205,7 +213,7 @@
     ["/recalls" {:get {:parameters {:query [:map [:categories {:optional true} :string]]}
                        :responses  {200 {:body schema/RecallsOut}}
                        :handler (fn [req] (recalls-handler conn cfg req))}}]
-    ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall).
+    ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall/by-tags).
     ["/memories"       {:get  {:handler (fn [req] (memories-handler conn req))}
                         :post {:parameters {:body schema/CreateBody}
                                :responses  {201 {:body schema/IdOut} 409 {:body schema/Conflict}}
@@ -213,9 +221,13 @@
     ["/memories/batch" {:post {:parameters {:body schema/BatchBody}
                                :responses  {200 {:body schema/BatchOut} 422 {:body schema/BatchError}}
                                :handler (fn [req] (batch-handler conn cfg req))}}]
-    ;; No :responses: the NDJSON stream cannot be response-coerced (see schema/RecallOut).
-    ["/memories/recall" {:post {:parameters {:body schema/RecallBody}
-                                :handler (fn [req] (recall-handler conn writer req))}}]
+    ;; A recall selects either by category:label pairs (by-tags) or by a list of
+    ;; ids (by-ids). No :responses: the NDJSON stream cannot be response-coerced
+    ;; (see schema/RecallOut). Both are static paths, resolving ahead of /memories/:id.
+    ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByPairsBody}
+                                        :handler (fn [req] (recall-handler conn writer req))}}]
+    ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
+                                       :handler (fn [req] (recall-by-ids-handler conn req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
     ;; Static path, resolves ahead of /memories/:id. Bounded result, so it is response-coerced.

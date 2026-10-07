@@ -77,8 +77,9 @@ user id. Memories are private to their user.
 _Avoid_: account, tenant, client
 
 **Recall**:
-The act of asking for memories by their category:label pairs. A recall returns
-the matching memories and the memories they link to across hops.
+The act of asking for memories and getting back the matches plus the memories
+they link to across hops. A recall selects its matches either by category:label
+pairs or by a list of ids. The id form loads the ids a search returned.
 _Avoid_: query, request, fetch
 
 **Search**:

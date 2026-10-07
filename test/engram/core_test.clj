@@ -127,7 +127,7 @@
       ;; bob owns a matching fact that alice must never see.
       (memory/create! conn "bob" {:content "bob secret" :src "z"
                                   :tags [["domain" "clojure"]]})
-      (let [rows (memory/recall conn "alice" [["domain" "clojure"]])
+      (let [rows (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])
             srcs (set (map :src rows))]
         (testing "the pair match is returned"
           (is (contains? srcs "a")))
@@ -144,7 +144,7 @@
       (try
         (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]] :related ["c2"]})
         (memory/create! conn "alice" {:content "c2" :src "c2" :tags [["misc" "m"]] :related ["c1"]})
-        (is (= #{"c1" "c2"} (set (map :src (memory/recall conn "alice" [["domain" "clojure"]])))))
+        (is (= #{"c1" "c2"} (set (map :src (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
         (finally (d/close conn)))))
   (testing "a diamond returns the shared child once"
     (let [conn (fresh-conn)]
@@ -152,7 +152,7 @@
         (memory/create! conn "alice" {:content "m1" :src "m1" :tags [["domain" "clojure"]] :related ["x"]})
         (memory/create! conn "alice" {:content "m2" :src "m2" :tags [["domain" "clojure"]] :related ["x"]})
         (memory/create! conn "alice" {:content "x" :src "x" :tags [["misc" "m"]]})
-        (let [srcs (map :src (memory/recall conn "alice" [["domain" "clojure"]]))]
+        (let [srcs (map :src (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))]
           (is (= #{"m1" "m2" "x"} (set srcs)))
           (is (== 1 (count (filter #{"x"} srcs)))))
         (finally (d/close conn)))))
@@ -160,14 +160,42 @@
     (let [conn (fresh-conn)]
       (try
         (memory/create! conn "alice" {:content "s" :src "s" :tags [["domain" "clojure"]] :related ["s"]})
-        (is (= ["s"] (map :src (memory/recall conn "alice" [["domain" "clojure"]]))))
+        (is (= ["s"] (map :src (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))))
         (finally (d/close conn)))))
   (testing "a related pointing at a nonexistent src yields nothing extra"
     (let [conn (fresh-conn)]
       (try
         (memory/create! conn "alice" {:content "g" :src "g" :tags [["domain" "clojure"]] :related ["ghost"]})
-        (is (= #{"g"} (set (map :src (memory/recall conn "alice" [["domain" "clojure"]])))))
+        (is (= #{"g"} (set (map :src (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
         (finally (d/close conn))))))
+
+(deftest recall-by-ids-selects-and-follows-closure
+  (let [conn (fresh-conn)]
+    (try
+      ;; a links to b; b stands alone; c is unrelated. bob owns z.
+      (let [a (memory/create! conn "alice" {:content "fact a" :src "a"
+                                            :tags [["domain" "clojure"]] :related ["b"]})
+            _ (memory/create! conn "alice" {:content "fact b" :src "b" :tags [["tech" "datalevin"]]})
+            c (memory/create! conn "alice" {:content "fact c" :src "c" :tags [["domain" "clojure"]]})
+            z (memory/create! conn "bob"   {:content "bob secret" :src "z" :tags [["domain" "clojure"]]})]
+        (testing "a selected id returns, and its related closure is pulled in"
+          (is (= #{"a" "b"} (set (map :src (memory/recall-by-ids conn "alice" [a]))))))
+        (testing "a foreign id is skipped silently"
+          (is (empty? (memory/recall-by-ids conn "alice" [z]))))
+        (testing "a missing id is skipped silently"
+          (is (empty? (memory/recall-by-ids conn "alice" [(str (java.util.UUID/randomUUID))]))))
+        (testing "a duplicate id collapses to one memory"
+          (is (= ["c"] (map :src (memory/recall-by-ids conn "alice" [c c])))))
+        (testing "an empty id list selects nothing"
+          (is (empty? (memory/recall-by-ids conn "alice" []))))
+        (testing "each row carries the recall wire shape, no score"
+          (let [m (first (filter #(= "a" (:src %)) (memory/recall-by-ids conn "alice" [a])))]
+            (is (= #{:id :content :src :tags :related} (set (keys m))))))
+        (testing "a mix of own, foreign, and missing returns only the owned closure"
+          (let [srcs (set (map :src (memory/recall-by-ids conn "alice"
+                                                          [a z (str (java.util.UUID/randomUUID))])))]
+            (is (= #{"a" "b"} srcs)))))
+      (finally (d/close conn)))))
 
 (deftest all-memories-returns-every-owned-memory
   (let [conn (fresh-conn)]
@@ -340,10 +368,10 @@
       (let [id (memory/create! conn "alice" {:content "temp" :src "s"
                                              :tags [["domain" "clojure"]]})]
         (testing "the memory is present before the delete"
-          (is (== 1 (count (memory/recall conn "alice" [["domain" "clojure"]])))))
+          (is (== 1 (count (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
         (testing "delete removes it and returns the id"
           (is (= id (memory/delete! conn "alice" id)))
-          (is (empty? (memory/recall conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
 
 (deftest delete-missing-and-isolation
@@ -355,7 +383,7 @@
                                              :tags [["domain" "clojure"]]})]
         (testing "another user cannot delete it, and it survives"
           (is (nil? (memory/delete! conn "bob" id)))
-          (is (= 1 (count (memory/recall conn "alice" [["domain" "clojure"]]))))))
+          (is (= 1 (count (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))))))
       (finally (d/close conn)))))
 
 ;; ---------- memory: batch apply ----------
@@ -387,7 +415,7 @@
           (is (== 1 (count (:ids res))))
           (is (== 3 (:applied res))))
         (let [by-src (into {} (map (juxt :src identity)
-                                   (memory/recall conn "alice" [["domain" "clojure"]])))]
+                                   (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))]
           (testing "the create landed and the update changed content in place"
             (is (contains? by-src "a"))
             (is (= "new-x" (:content (by-src "x")))))
@@ -408,7 +436,7 @@
           (is (= [{:op "create" :i 1}] (map #(select-keys % [:op :i]) (:errors res))))
           (is (= errors/no-configuration (:code (first (:errors res))))))
         (testing "nothing was written, not even the valid create"
-          (is (empty? (memory/recall conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
 
 (deftest batch-missing-id-and-isolation
@@ -429,7 +457,7 @@
           (let [res (memory/apply-batch! conn "bob" {:delete [x]} create-tag-err update-tag-err)]
             (is (false? (:ok? res)))
             (is (= errors/not-found (:code (first (:errors res))))))
-          (is (== 1 (count (memory/recall conn "alice" [["domain" "clojure"]]))))))
+          (is (== 1 (count (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))))))
       (finally (d/close conn)))))
 
 (deftest batch-cumulative-update
@@ -443,7 +471,7 @@
         (testing "several updates to one id fold cumulatively per field, writing one memory"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
-          (let [m (first (memory/recall conn "alice" [["domain" "clojure"]]))]
+          (let [m (first (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))]
             (is (= "c2" (:content m)))
             (is (= ["y"] (:related m))))))
       (finally (d/close conn)))))
@@ -461,7 +489,7 @@
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
                  (set (map #(select-keys % [:op :i]) (:errors res)))))
           (is (= #{errors/conflict} (set (map :code (:errors res)))))
-          (is (= "orig" (:content (first (memory/recall conn "alice" [["domain" "clojure"]])))))))
+          (is (= "orig" (:content (first (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))))
       (finally (d/close conn)))))
 
 (deftest batch-duplicate-delete-tolerated
@@ -472,7 +500,7 @@
         (testing "a repeated delete id is deduplicated, deletes once, no error"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
-          (is (empty? (memory/recall conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
       (finally (d/close conn)))))
 
 (deftest plan-batch-is-pure
@@ -490,8 +518,8 @@
           (is (seq (:tx-data plan)))
           (is (== 2 (:applied plan))))
         (testing "the planner writes nothing: the seed memory is unchanged and alone"
-          (is (= "orig" (:content (first (memory/recall conn "alice" [["domain" "clojure"]])))))
-          (is (== 1 (count (memory/recall conn "alice" [["domain" "clojure"]]))))))
+          (is (= "orig" (:content (first (memory/recall-by-pairs conn "alice" [["domain" "clojure"]])))))
+          (is (== 1 (count (memory/recall-by-pairs conn "alice" [["domain" "clojure"]]))))))
       (finally (d/close conn)))))
 
 (deftest plan-batch-reports-errors-without-tx-data
@@ -716,7 +744,7 @@
           (is (= "the broad subject area" (get-in body [:categories :domain :description])))
           (is (some #{"clojure"} (get-in body [:categories :domain :examples])))))
       (testing "the recall call streams NDJSON when asked"
-        (let [resp  (request app :post "/memories/recall"
+        (let [resp  (request app :post "/memories/recall/by-tags"
                              {:user "alice" :accept "application/x-ndjson"
                               :body {:pairs [["domain" "clojure"]]}})
               lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
@@ -737,12 +765,61 @@
       (dotimes [i n]
         (memory/create! conn "alice" {:content (str "m" i) :src (str "s" i)
                                       :tags [["domain" "clojure"]]}))
-      (let [resp  (request app :post "/memories/recall"
+      (let [resp  (request app :post "/memories/recall/by-tags"
                            {:user "alice" :accept "application/x-ndjson"
                             :body {:pairs [["domain" "clojure"]]}})
             lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
         (testing "every matched memory streams, not just the first chunk"
           (is (= (inc n) (count lines)))))          ; header line + n memories
+      (finally (d/close conn)))))
+
+(deftest handler-recall-by-ids-route
+  (let [conn (fresh-conn)
+        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+    (try
+      (let [a (:id (body-json (request app :post "/memories"
+                                       {:user "alice" :accept "application/json"
+                                        :body {:content "fact a" :src "a"
+                                               :tags [["domain" "clojure"]] :related ["b"]}})))
+            _ (request app :post "/memories"
+                       {:user "alice" :accept "application/json"
+                        :body {:content "fact b" :src "b" :tags [["domain" "clojure"]]}})
+            z (:id (body-json (request app :post "/memories"
+                                       {:user "bob" :accept "application/json"
+                                        :body {:content "bob secret" :src "z"
+                                               :tags [["domain" "clojure"]]}})))]
+        (testing "the id recall streams NDJSON with the matches and their closure"
+          (let [resp  (request app :post "/memories/recall/by-ids"
+                               {:user "alice" :accept "application/x-ndjson" :body {:ids [a]}})
+                lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+                mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))]
+            (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"])))
+            (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper))))
+            (is (= #{"a" "b"} (set (map :src mems))))
+            (testing "a row carries no score and no category projection"
+              (is (not-any? :score mems)))))
+        (testing "the JSON fallback carries memories, matching the selected closure"
+          (let [body (body-json (request app :post "/memories/recall/by-ids"
+                                          {:user "alice" :accept "application/json" :body {:ids [a]}}))]
+            (is (vector? (:memories body)))
+            (is (= #{"a" "b"} (set (map :src (:memories body)))))))
+        (testing "a foreign id is skipped silently, so nothing matches"
+          (let [body (body-json (request app :post "/memories/recall/by-ids"
+                                          {:user "alice" :accept "application/json" :body {:ids [z]}}))]
+            (is (empty? (:memories body)))))
+        (testing "an empty ids list returns a 200 with a header-only stream"
+          (let [resp  (request app :post "/memories/recall/by-ids"
+                               {:user "alice" :accept "application/x-ndjson" :body {:ids []}})
+                lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
+            (is (== 200 (:status resp)))
+            (is (= 1 (count lines)))))
+        (testing "a non-uuid id is a 400 at coercion"
+          (is (== 400 (:status (request app :post "/memories/recall/by-ids"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:ids ["not-a-uuid"]}})))))
+        (testing "a request without the user header is rejected"
+          (is (== 401 (:status (request app :post "/memories/recall/by-ids"
+                                        {:accept "application/json" :body {:ids [a]}}))))))
       (finally (d/close conn)))))
 
 (deftest handler-memories-streams-all
@@ -978,7 +1055,7 @@
       (request app :post "/memories"
                {:user "alice" :accept "application/json"
                 :body {:content "prefer ==" :src "s" :tags [["domain" "clojure"]]}})
-      (let [resp (request app :post "/memories/recall"
+      (let [resp (request app :post "/memories/recall/by-tags"
                           {:user "alice" :accept "application/json"
                            :body {:pairs [["domain" "clojure"]]}})
             body (body-json resp)]
@@ -1078,8 +1155,8 @@
         (is (some? (get-in (request app :get "/healthz" {:accept "application/json"})
                            [:headers "X-Engram-Request-Id"]))))
       (testing "a handler error returns 500 with the correlation id in body and header"
-        (with-redefs [memory/recall (fn [& _] (throw (ex-info "boom" {})))]
-          (let [resp (request app :post "/memories/recall"
+        (with-redefs [memory/recall-by-pairs (fn [& _] (throw (ex-info "boom" {})))]
+          (let [resp (request app :post "/memories/recall/by-tags"
                               {:user "alice" :accept "application/json"
                                :body {:pairs [["domain" "clojure"]]}})
                 body (body-json resp)]
