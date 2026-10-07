@@ -30,7 +30,7 @@ Examples:
 
 ```bash
 ssh engram GET /config < /dev/null
-ssh engram GET /stats  < /dev/null
+ssh engram GET /recalls < /dev/null
 echo '{"pairs":[["domain","clojure"]]}' | ssh engram POST /memories/recall
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
 ```
@@ -58,8 +58,8 @@ Read them to pick labels that match how the admin means each category.
 
 ## Recall: two calls
 
-1. `ssh engram GET /stats` returns one row for every category:label pair on your
-   memories. The body is `{"stats": {"recalls": [ ... ]}}`. Each entry is a
+1. `ssh engram GET /recalls` returns one row for every category:label pair on your
+   memories. The body is `{"recalls": [ ... ]}`. Each entry is a
    positional row `[category, label, count, lifetime, recent]`. The count is how
    many of your memories carry the pair. A pair you never recalled still appears,
    with a lifetime of 0 and a recent of 0.0. Use the count, the lifetime, and the

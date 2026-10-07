@@ -81,7 +81,7 @@ _Avoid_: query, request, fetch
 
 **Recall count**:
 How often a category:label pair was recalled. engram keeps it as a lifetime
-total and a recent decay measure. On the wire a stats row is a positional row of
+total and a recent decay measure. On the wire a recalls row is a positional row of
 category, label, count, lifetime, and recent. The count is how many of the
 caller's memories carry the pair. A pair that no recall touched still appears,
 with a lifetime of 0 and a recent of 0.0.

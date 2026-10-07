@@ -20,7 +20,7 @@ Every call is `ssh engram <METHOD> <PATH>`, with any request body on stdin. A GE
 carries no body, so close stdin with `< /dev/null`.
 
 ```bash
-ssh engram GET /stats < /dev/null
+ssh engram GET /recalls < /dev/null
 ssh engram GET /config < /dev/null
 ssh engram GET /memories/nonconforming < /dev/null
 cat batch.json | ssh engram POST /memories/batch
@@ -32,8 +32,8 @@ Run `ssh engram GET /config < /dev/null`. The body carries `configurations`, the
 acceptable category-to-cardinality maps, and `categories`, a description and
 examples per category. A memory is valid once its tags satisfy one configuration.
 
-Run `ssh engram GET /stats < /dev/null` for the label vocabulary already in use.
-The body is `{"stats": {"recalls": [ ... ]}}`, and each row is `[category, label,
+Run `ssh engram GET /recalls < /dev/null` for the label vocabulary already in use.
+The body is `{"recalls": [ ... ]}`, and each row is `[category, label,
 count, lifetime, recent]`. Read the category and label of every row. Reuse an
 existing label over a near-duplicate.
 

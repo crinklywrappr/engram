@@ -767,25 +767,6 @@
             (is (not (contains? m :related))))))
       (finally (d/close conn)))))
 
-(deftest handler-stats-nested-shape
-  (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
-    (try
-      (memory/create! conn "alice" {:content "prefer ==" :src "s" :tags [["domain" "clojure"]]})
-      (seed-recall! conn "alice" (:half-life-days cfg) [["domain" "clojure"]])
-      (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
-            body (body-json resp)]
-        (testing "the stats body nests the recall rows under :stats then :recalls, as five-element tuples"
-          (is (== 200 (:status resp)))
-          (is (vector? (get-in body [:stats :recalls])))
-          (let [row (first (get-in body [:stats :recalls]))]
-            (is (= "domain" (nth row 0)))
-            (is (= "clojure" (nth row 1)))
-            (is (== 1 (nth row 2)))                         ; count: one memory carries the pair
-            (is (== 1 (nth row 3)))                         ; lifetime: one recall
-            (is (number? (nth row 4))))))                   ; recent: decayed count
-      (finally (d/close conn)))))
-
 (deftest handler-stats-carries-link-density
   (let [conn (fresh-conn)
         app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
@@ -795,9 +776,9 @@
       (let [resp (request app :get "/stats" {:user "alice" :accept "application/json"})
             body (body-json resp)
             ld   (get-in body [:stats :link-density])]
-        (testing "link density sits beside the recall rows under :stats"
+        (testing "link density sits under :stats, and the recall rows are gone"
           (is (== 200 (:status resp)))
-          (is (vector? (get-in body [:stats :recalls])))
+          (is (nil? (get-in body [:stats :recalls])))
           (is (map? ld)))
         (testing "the two metrics are present and numeric"
           (is (== 0.5 (:avg-out-degree ld)))           ; one edge a->b over two nodes

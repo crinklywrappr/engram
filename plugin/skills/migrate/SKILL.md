@@ -18,8 +18,8 @@ build a preview, then apply it after the user approves.
   files. Each file has frontmatter (`name`, `description`, `metadata.type`).
 - The engram configuration: run `ssh engram GET /config < /dev/null` first to learn
   the closed set of categories and their cardinalities.
-- The labels already in use: run `ssh engram GET /stats < /dev/null` next. The body
-  is `{"stats": {"recalls": [ ... ]}}`, and each entry is a positional row
+- The labels already in use: run `ssh engram GET /recalls < /dev/null` next. The body
+  is `{"recalls": [ ... ]}`, and each entry is a positional row
   `[category, label, count, lifetime, recent]`. Read the category and label of
   every row to learn the vocabulary your memories already carry. Reuse these
   labels during the migration, so you do not add a near-duplicate of a label that

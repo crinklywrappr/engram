@@ -1,6 +1,6 @@
 # 06: Add the `/conform` skill
 
-**What to build:** The `/conform` skill brings nonconforming memories back into line with the configuration. The skill reads `GET /config` for the live configurations and categories. The skill reads `GET /memories/nonconforming` for the memories that fail. The skill reads `GET /stats` for the label vocabulary already in use.
+**What to build:** The `/conform` skill brings nonconforming memories back into line with the configuration. The skill reads `GET /config` for the live configurations and categories. The skill reads `GET /memories/nonconforming` for the memories that fail. The skill reads `GET /recalls` for the label vocabulary already in use.
 
 The skill splits the nonconforming memories into fixed-size chunks. The skill spawns one Haiku subagent per chunk, with a model override. The skill runs about ten subagents at a time. Each subagent proposes the smallest tag change that makes a memory satisfy a configuration. The subagent judges the change from the memory's content and existing tags. The subagent reuses a label from the vocabulary over a near-duplicate. The subagent writes the fixes it is confident about to a shared directory. The subagent writes a declined list of the memory ids it does not touch.
 
@@ -18,7 +18,7 @@ The skill reasons only from the live configuration and the live nonconforming se
 
 - [ ] The skill reads the live configurations and categories from `GET /config`.
 - [ ] The skill reads the nonconforming memories from `GET /memories/nonconforming`.
-- [ ] The skill reads the label vocabulary from `GET /stats`, and the subagents and the master reuse an existing label over a near-duplicate.
+- [ ] The skill reads the label vocabulary from `GET /recalls`, and the subagents and the master reuse an existing label over a near-duplicate.
 - [ ] The skill splits the memories into chunks and runs about ten Haiku subagents at a time.
 - [ ] Each subagent proposes the smallest conforming tag change for the memories it is confident about.
 - [ ] Each subagent writes a declined list for the memories it does not touch.

@@ -92,8 +92,7 @@
 (defn- stats-handler [conn cfg req]
   (let [user (:engram/user req)]
     {:status 200
-     :body {:stats {:recalls (mapv recall-row (stats/catalog conn user (:half-life-days cfg)))
-                    :link-density (stats/link-density conn user)}}}))
+     :body {:stats {:link-density (stats/link-density conn user)}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations
