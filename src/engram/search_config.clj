@@ -1,4 +1,4 @@
-(ns engram.search
+(ns engram.search-config
   "The full-text search engine configuration, shared by the running system and
   the tests so both index memories the same way.
 

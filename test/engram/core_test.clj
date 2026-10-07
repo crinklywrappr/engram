@@ -8,7 +8,7 @@
             [engram.handler :as handler]
             [engram.memory :as memory]
             [engram.migrations :as migrations]
-            [engram.search :as search]
+            [engram.search-config :as search-config]
             [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
             [engram.system :as system]
@@ -316,13 +316,13 @@
 (deftest reindex-decision
   (let [full #{:memory/content :memory/src}]
     (testing "no drift: equal opts signature and unchanged full-text set skips re-index"
-      (is (false? (boolean (search/reindex? search/engine-opts full full)))))
+      (is (false? (boolean (search-config/reindex? search-config/engine-opts full full)))))
     (testing "a grown full-text set forces a re-index"
-      (is (true? (boolean (search/reindex? search/engine-opts #{:memory/content} full)))))
+      (is (true? (boolean (search-config/reindex? search-config/engine-opts #{:memory/content} full)))))
     (testing "absent persisted opts (a fresh or pre-feature store) forces a re-index"
-      (is (true? (boolean (search/reindex? nil full full)))))
+      (is (true? (boolean (search-config/reindex? nil full full)))))
     (testing "a changed index-structure flag forces a re-index"
-      (is (true? (boolean (search/reindex? (assoc search/engine-opts :index-position? false)
+      (is (true? (boolean (search-config/reindex? (assoc search-config/engine-opts :index-position? false)
                                            full full)))))))
 
 (deftest search-opts-persist-and-round-trip
@@ -331,14 +331,14 @@
   ;; this, system/migrated-conn would silently re-index on every boot, so this
   ;; test fails loudly instead.
   (let [dir (.toString (Files/createTempDirectory "engram-opts" (make-array FileAttribute 0)))]
-    (let [c (d/get-conn dir {} search/conn-opts)]
+    (let [c (d/get-conn dir {} search-config/conn-opts)]
       (sc/migrate-all! (sc/store c) migrations/migrations)
       (d/close c))
     (let [c (d/get-conn dir)]                                   ; bare reopen, exactly as the system does
       (try
         (testing "the persisted search-opts round-trip to an equal signature"
-          (is (= (search/opts-signature search/engine-opts)
-                 (search/opts-signature (:search-opts (d/opts c))))))
+          (is (= (search-config/opts-signature search-config/engine-opts)
+                 (search-config/opts-signature (:search-opts (d/opts c))))))
         (testing "a bare open yields the persisted analyzer, not the default (index-position? default is false)"
           (is (true? (:index-position? (:search-opts (d/opts c))))))
         (finally (d/close c))))))
@@ -351,7 +351,7 @@
     (let [c (d/get-conn dir)]
       (sc/migrate-all! (sc/store c) (take 1 migrations/migrations))  ; 001 only: src not full-text
       (d/close c))
-    (let [c (d/get-conn dir {} search/conn-opts)]                    ; reopen so the content engine is built
+    (let [c (d/get-conn dir {} search-config/conn-opts)]                    ; reopen so the content engine is built
       (memory/create! c "alice" {:content "a short note" :src "engram-deploy"})
       (testing "before the src migration, a src-only word does not match"
         (is (empty? (memory/search c "alice" "engram" 10))))

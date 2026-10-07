@@ -355,25 +355,35 @@
              :score   score}
       (seq tags) (assoc :tags tags))))
 
+(defn- fulltext-scores
+  "Run the ranked full-text query over every :db/fulltext attribute, returning
+  `[eid score]` rows. `top` bounds the candidate count. `keep?` is the
+  doc-filter: it takes a doc-ref `[eid attr value]` and keeps the candidate when
+  truthy, used to scope the scan to the caller's own memories. A memory can match
+  in more than one attribute, so an eid can repeat across the rows."
+  [db query top keep?]
+  (d/q '[:find ?e ?score
+         :in $ ?q ?opts
+         :where [(fulltext $ ?q ?opts) [[?e ?a ?v ?score]]]]
+       db query {:display    :refs+scores
+                 :top        top
+                 :doc-filter keep?}))
+
 (defn search
   "Return up to `limit` of `user`'s memories that best match the full-text
   `query`, ranked by relevance, each carrying a :score. One ranked query covers
-  content and src. A `:doc-filter` restricts the scan to the caller's own
-  memories, so one user never sees another's and the fulltext :top is spent on
-  the caller's hits. A memory that matches in both fields returns two rows, so
-  the rows reduce to one score per entity, keeping the higher. Search follows no
-  related links. The result is a vector bounded by `limit`."
+  content and src. A doc-filter restricts the scan to the caller's own memories,
+  so one user never sees another's and the fulltext :top is spent on the caller's
+  hits. A memory that matches in both fields returns two rows, so the rows reduce
+  to one score per entity, keeping the higher. Search follows no related links.
+  The result is a vector bounded by `limit`."
   [conn user query limit]
   (let [db   (d/db conn)
         mine (set (all-eids db user))
-        rows (d/q '[:find ?e ?score
-                    :in $ ?q ?opts
-                    :where [(fulltext $ ?q ?opts) [[?e ?a ?v ?score]]]]
-                  ;; over-fetch: a memory can match in both content and src, and
-                  ;; the dedup below collapses that to one row, so fetch extra.
-                  db query {:display    :refs+scores
-                            :top        (* 3 limit)
-                            :doc-filter (fn [doc-ref] (contains? mine (first doc-ref)))})
+        ;; over-fetch: a memory can match in both content and src, and the dedup
+        ;; below collapses that to one row, so fetch extra.
+        rows (fulltext-scores db query (* 3 limit)
+                              (fn [doc-ref] (contains? mine (first doc-ref))))
         best (reduce (fn [m [e s]] (update m e (fnil max 0.0) s)) {} rows)]
     (->> best
          (sort-by val >)

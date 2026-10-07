@@ -16,7 +16,7 @@
             [engram.config :as config]
             [engram.handler :as handler]
             [engram.migrations :as migrations]
-            [engram.search :as search]
+            [engram.search-config :as search-config]
             [engram.stats.writer :as stat-writer]
             [integrant.core :as ig]
             [org.httpkit.server :as hk]
@@ -33,13 +33,13 @@
   the migrated component and the test harness so both decide identically."
   [conn path]
   (let [persisted (:search-opts (d/opts conn))
-        before    (search/fulltext-attrs (d/schema conn))]
+        before    (search-config/fulltext-attrs (d/schema conn))]
     (sc/migrate-all! (sc/store conn) migrations/migrations)
-    (let [after (search/fulltext-attrs (d/schema conn))]
-      (if (search/reindex? persisted before after)
-        (d/close (d/re-index conn {:search-opts search/engine-opts}))
+    (let [after (search-config/fulltext-attrs (d/schema conn))]
+      (if (search-config/reindex? persisted before after)
+        (d/close (d/re-index conn {:search-opts search-config/engine-opts}))
         (d/close conn))
-      (d/get-conn path {} search/conn-opts))))
+      (d/get-conn path {} search-config/conn-opts))))
 
 (defmethod ig/init-key :engram.db/conn [_ {:keys [path]}]
   (d/get-conn (data-path path)))
