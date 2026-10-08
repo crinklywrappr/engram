@@ -90,19 +90,21 @@ passes their ids to a later recall.
 _Avoid_: query, grep, find
 
 **Recall count**:
-How often a category:label pair was recalled. engram keeps it as a lifetime
-total and a recent decay measure. On the wire a recalls row is a positional row of
-category, label, count, lifetime, and recent. The count is how many of the
-caller's memories carry the pair. A pair that no recall touched still appears,
-with a lifetime of 0 and a recent of 0.0.
+How often a tag or a memory was recalled. engram keeps it as a lifetime total
+and a recent decay measure. Only a recall under `/memories/recall/*` increments
+it. A search does not. On the wire a recalls row is a positional row of category,
+label, count, lifetime, and recent. The count is how many of the caller's
+memories carry the tag. A tag that no recall touched still appears, with a
+lifetime of 0 and a recent of 0.0. A memory keeps its own recall count too, held
+on the memory and not on the wire.
 _Avoid_: hits, fetch count
 
 **Lifetime count**:
-The running total of how often a category:label pair was recalled.
+The running total of how often a tag or a memory was recalled.
 _Avoid_: total, hits
 
 **Recent count**:
-The exponential-decay measure of how often a category:label pair was recalled
+The exponential-decay measure of how often a tag or a memory was recalled
 lately, kept beside the lifetime count.
 _Avoid_: score, frequency, weight
 

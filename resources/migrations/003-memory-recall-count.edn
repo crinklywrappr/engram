@@ -1,0 +1,7 @@
+;; Per-memory recall count. A lifetime total, a recent exponential-decay weight,
+;; and the last-recalled timestamp, held on the memory entity and upserted by
+;; :memory/id. Additive, so :down is auto-derived. No attribute gains full-text,
+;; so the boot drift check sees no change and triggers no re-index.
+{:up {:schema/create {:memory/recall-lifetime {:db/valueType :db.type/long}
+                      :memory/recall-decayed  {:db/valueType :db.type/double}
+                      :memory/last-recalled   {:db/valueType :db.type/instant}}}}

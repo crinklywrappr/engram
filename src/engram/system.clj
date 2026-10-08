@@ -17,6 +17,7 @@
             [engram.handler :as handler]
             [engram.migrations :as migrations]
             [engram.search-config :as search-config]
+            [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
             [integrant.core :as ig]
             [org.httpkit.server :as hk]
@@ -58,15 +59,22 @@
   (let [c (config/load-config path)]
     (assoc c :tag-schema (config/compile-tag-schema c))))
 
-(defmethod ig/init-key :engram.stats/writer [_ {:keys [conn config]}]
-  (stat-writer/writer conn (:half-life-days config)))
+(defmethod ig/init-key :engram.stats/tag-writer [_ {:keys [conn config]}]
+  (stat-writer/writer conn (stats/->TagRecallCount (:half-life-days config))))
 
-(defmethod ig/halt-key! :engram.stats/writer [_ writer]
+(defmethod ig/halt-key! :engram.stats/tag-writer [_ writer]
   ;; drain the pending recalls while the connection is still open
   (stat-writer/drain! writer))
 
-(defmethod ig/init-key :engram.web/handler [_ {:keys [db config writer]}]
-  (handler/app db config writer))
+(defmethod ig/init-key :engram.stats/mem-writer [_ {:keys [conn config]}]
+  (stat-writer/writer conn (stats/->MemoryRecallCount (:half-life-days config))))
+
+(defmethod ig/halt-key! :engram.stats/mem-writer [_ writer]
+  ;; drain the pending recalls while the connection is still open
+  (stat-writer/drain! writer))
+
+(defmethod ig/init-key :engram.web/handler [_ {:keys [db config tag-writer mem-writer]}]
+  (handler/app db config tag-writer mem-writer))
 
 (defmethod ig/init-key :engram.web/server [_ {:keys [handler port]}]
   (hk/run-server handler {:port (parse-long (or (System/getenv "PORT") (str port)))

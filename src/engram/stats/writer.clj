@@ -3,8 +3,8 @@
 
   One agent is the only serialization point, and it dispatches every action
   through a single-thread daemon executor the writer owns (send-via, not send
-  or send-off). Its value holds the pending recalls keyed by [user category
-  label], the scheduled flush, and the window start. Because every action runs
+  or send-off). Its value holds the pending recalls, keyed by the writer's
+  strategy, the scheduled flush, and the window start. Because every action runs
   on the agent, one at a time, no two read-modify-writes interleave and no
   increment is lost, and the debounce state needs no lock. engram never touches
   the shared agent pools, so its threads are daemon and the JVM exits without
@@ -19,16 +19,15 @@
                                  ScheduledExecutorService ScheduledFuture ThreadFactory TimeUnit]))
 
 (defn- flush-recalls
-  "Agent action. Drain the pending recalls to one transaction and reset them. On
-  a write failure, keep the pending recalls so the next flush retries the counts."
+  "Agent action. Drain the pending recalls to one transaction and reset them. The
+  writer's strategy plans the tx-data from the pending map. On a write failure,
+  keep the pending recalls so the next flush retries the counts."
   [{:keys [pending-recalls] :as state} writer]
   (if (empty? pending-recalls)
     (assoc state :timer nil :first-ms nil)
     (try
-      (let [db       (d/db (:conn writer))
-            flush-ms (System/currentTimeMillis)
-            tx       (mapcat (fn [[user pcs]] (stats/plan-recalls db user (:half-life writer) pcs flush-ms))
-                             (stats/by-user pending-recalls))]
+      (let [flush-ms (System/currentTimeMillis)
+            tx       (stats/->writes (:strategy writer) pending-recalls (d/db (:conn writer)) flush-ms)]
         (when (seq tx) (d/transact! (:conn writer) (vec tx)))
         (assoc state :pending-recalls {} :timer nil :first-ms nil))
       (catch Throwable e
@@ -51,21 +50,24 @@
       (catch RejectedExecutionException _ nil))))
 
 (defn- absorb
-  "Agent action. Fold a recall into the pending recalls, then cancel the prior
-  scheduled flush and reschedule one. A repeated pair adds one to its count."
-  [{:keys [timer first-ms] :as state} writer user pairs]
-  (let [pending' (reduce (fn [b [c l]] (update b [user c l] (fnil inc 0))) (:pending-recalls state) pairs)
+  "Agent action. Fold recorded items into the pending recalls through the
+  writer's strategy, then cancel the prior scheduled flush and reschedule one. A
+  repeated item adds one to its count."
+  [{:keys [timer first-ms] :as state} writer user xs]
+  (let [pending' (stats/->pending (:strategy writer) (:pending-recalls state) user xs)
         first-ms (or first-ms (System/currentTimeMillis))]
     (when-let [^ScheduledFuture t timer] (.cancel t false))
     (assoc state :pending-recalls pending' :first-ms first-ms :timer (schedule-flush! writer first-ms))))
 
 (defn writer
-  "Create the stat-write consumer with a debounced flush. Its agent value holds
-  the pending recalls keyed by [user category label], the scheduled flush, and
-  the window start.
+  "Create the stat-write consumer with a debounced flush. The `strategy` is a
+  `engram.stats/RecallCountWritable` record (a `TagRecallCount` or a
+  `MemoryRecallCount`). It decides how recorded items fold into the pending map
+  and how that map becomes tx-data, so the writer machinery is the same for both
+  kinds. Its agent value holds the pending recalls, the scheduled flush, and the
+  window start.
 
   Tuning:
-  - `half-life-days` is the decay half-life in days, from the admin config.
   - `debounce-ms` defaults to 200. Each recall reschedules a one-shot flush this
     many milliseconds later.
   - `max-wait-ms` defaults to 2000. A sustained burst still flushes within this
@@ -82,33 +84,43 @@
   - `:agent` serializes the work. Its value holds the pending recalls, the
     scheduled flush, and the window start.
   - `:conn` is the Datalevin connection each flush writes to.
-  - `:half-life` is the decay half-life in days, from the admin config.
+  - `:strategy` is the `RecallCountWritable` record that folds and plans.
   - `:consumer` is the single-thread daemon executor that applies every action.
   - `:scheduler` is the single-thread daemon executor that fires the flush.
-  - `:closed?` prevents writes during shutdown. `drain!` sets it, and it turns `record!` into a no-op.
+  - `:closed?` prevents writes during shutdown. `drain!` sets it, and it turns the record functions into a no-op.
   - `:debounce-ms` is the debounce delay in milliseconds.
   - `:max-wait-ms` is the cap on debounce postponement in milliseconds."
-  [conn half-life-days & {:keys [debounce-ms max-wait-ms]
-                          :or   {debounce-ms 200 max-wait-ms 2000}}]
+  [conn strategy & {:keys [debounce-ms max-wait-ms]
+                    :or   {debounce-ms 200 max-wait-ms 2000}}]
   (letfn [(daemon [nm] (reify ThreadFactory
                          (newThread [_ r] (doto (Thread. ^Runnable r nm) (.setDaemon true)))))]
     {:agent       (agent {:pending-recalls {} :timer nil :first-ms nil} :error-mode :continue)
      :conn        conn
-     :half-life   half-life-days
+     :strategy    strategy
      :consumer    (Executors/newSingleThreadExecutor (daemon "engram-stat-consumer"))
      :scheduler   (Executors/newSingleThreadScheduledExecutor (daemon "engram-stat-debounce"))
      :closed?     (atom false)
      :debounce-ms debounce-ms
      :max-wait-ms max-wait-ms}))
 
-(defn record!
-  "Fold one recall into the pending recalls and reschedule the debounced flush.
-  Return at once, so the caller never waits on the write and a write failure
-  never reaches the caller. A no-op once the writer is drained."
-  [{ag :agent consumer :consumer closed? :closed? :as writer} user pairs]
+(defn- record*
+  "Hand `xs` to the writer's agent to fold through its strategy. Return at once,
+  so the caller never waits on the write and a write failure never reaches the
+  caller. A no-op once the writer is drained."
+  [{ag :agent consumer :consumer closed? :closed? :as writer} user xs]
   (when-not @closed?
-    (send-via consumer ag absorb writer user pairs))
+    (send-via consumer ag absorb writer user xs))
   nil)
+
+(defn record-pairs!
+  "Record one recall of each `pairs` tag for `user`, through a tag writer."
+  [writer user pairs]
+  (record* writer user pairs))
+
+(defn record-memories!
+  "Record one recall of each memory in `ids` for `user`, through a memory writer."
+  [writer user ids]
+  (record* writer user ids))
 
 (defn drain!
   "Stop taking new recalls, cancel the pending flush, drain the pending recalls,

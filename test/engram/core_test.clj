@@ -30,6 +30,35 @@
   (let [dir (.toString (Files/createTempDirectory "engram-test" (make-array FileAttribute 0)))]
     (system/migrated-conn (d/get-conn dir) dir)))
 
+(defn- test-app
+  "The ring app over `conn` and config `c` (default `cfg`), with a fresh tag
+  writer and memory writer. The writers are not drained. A test that asserts a
+  recorded count builds its own writer and drains it."
+  ([conn] (test-app conn cfg))
+  ([conn c] (handler/app conn c
+                         (stat-writer/writer conn (stats/->TagRecallCount (:half-life-days c)))
+                         (stat-writer/writer conn (stats/->MemoryRecallCount (:half-life-days c))))))
+
+(defn- mem-counts
+  "The caller's per-memory recall counts, keyed by src. Only a memory that
+  carries the recall attributes appears, so a never-recalled memory is absent."
+  [conn user]
+  (into {}
+        (map (fn [[src life dec last]] [src {:lifetime life :decayed dec :last-recalled last}]))
+        (d/q '[:find ?src ?life ?dec ?last
+               :in $ ?u
+               :where [?e :memory/user ?u]
+                      [?e :memory/src ?src]
+                      [?e :memory/recall-lifetime ?life]
+                      [?e :memory/recall-decayed ?dec]
+                      [?e :memory/last-recalled ?last]]
+             (d/db conn) user)))
+
+(defn- updated-at [conn id]
+  (d/q '[:find ?u . :in $ ?id
+         :where [?e :memory/id ?id] [?e :memory/updated-at ?u]]
+       (d/db conn) (java.util.UUID/fromString id)))
+
 ;; ---------- tag and token validation ----------
 
 (deftest tag-validation
@@ -562,11 +591,11 @@
 
 (deftest stat-writer-serializes-and-drains
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn 14)]
+        w    (stat-writer/writer conn (stats/->TagRecallCount 14))]
     (try
       ;; 10 threads each record the same pair 5 times, concurrently
       (let [fs (doall (repeatedly 10 #(future (dotimes [_ 5]
-                                                (stat-writer/record! w"alice" [["domain" "clojure"]])))))]
+                                                (stat-writer/record-pairs! w "alice" [["domain" "clojure"]])))))]
         (run! deref fs))
       (stat-writer/drain! w)
       (testing "every concurrent increment lands, none lost to a race"
@@ -575,18 +604,18 @@
 
 (deftest stat-write-failure-is-isolated
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn 14)]
+        w    (stat-writer/writer conn (stats/->TagRecallCount 14))]
     (d/close conn)                                   ; every flush now fails
     (testing "recording never throws to the caller when the write fails"
-      (is (nil? (stat-writer/record! w"alice" [["domain" "clojure"]]))))
+      (is (nil? (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]))))
     (testing "draining a failing writer does not throw"
       (is (nil? (stat-writer/drain! w))))))
 
 (deftest stat-flush-is-debounced-and-coalesces
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn 14 :debounce-ms 80 :max-wait-ms 1000)]
+        w    (stat-writer/writer conn (stats/->TagRecallCount 14) :debounce-ms 80 :max-wait-ms 1000)]
     (try
-      (dotimes [_ 5] (stat-writer/record! w"alice" [["domain" "clojure"]]))
+      (dotimes [_ 5] (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]))
       (testing "the flush is deferred, so no write has happened yet"
         (Thread/sleep 20)
         (is (empty? (stats/recalls conn "alice" 14))))
@@ -597,10 +626,10 @@
 
 (deftest stat-flush-max-wait-caps-postponement
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn 14 :debounce-ms 5000 :max-wait-ms 100)]
+        w    (stat-writer/writer conn (stats/->TagRecallCount 14) :debounce-ms 5000 :max-wait-ms 100)]
     (try
       ;; keep rescheduling faster than the debounce; the max wait must still flush
-      (dotimes [_ 8] (stat-writer/record! w"alice" [["domain" "clojure"]]) (Thread/sleep 30))
+      (dotimes [_ 8] (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]) (Thread/sleep 30))
       (testing "the maximum wait flushes even though the debounce never elapses"
         (is (pos? (:lifetime (first (stats/recalls conn "alice" 14))))))
       (finally (stat-writer/drain! w) (d/close conn)))))
@@ -716,7 +745,7 @@
 
 (deftest handler-flow
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "a request without the user header is rejected"
         (is (= 401 (:status (request app :post "/memories"
@@ -759,7 +788,7 @@
   ;; A recall of many matched memories streams every row over NDJSON: the header
   ;; line plus one line per memory, with nothing dropped.
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))
+        app  (test-app conn)
         n    40]
     (try
       (dotimes [i n]
@@ -775,7 +804,7 @@
 
 (deftest handler-recall-by-ids-route
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (let [a (:id (body-json (request app :post "/memories"
                                        {:user "alice" :accept "application/json"
@@ -826,7 +855,7 @@
   ;; GET /memories streams every memory the caller owns over NDJSON: the header
   ;; line plus one line per memory, with nothing dropped and no other user's rows.
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))
+        app  (test-app conn)
         n    40]
     (try
       (dotimes [i n]
@@ -849,7 +878,7 @@
 
 (deftest handler-nonconforming-streams
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (memory/create! conn "alice" {:content "ok" :src "ok" :tags [["domain" "clojure"]]})
       (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})
@@ -867,7 +896,7 @@
 
 (deftest handler-fetch-one
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (let [id (:id (body-json (request app :post "/memories"
                                         {:user "alice" :accept "application/json"
@@ -891,7 +920,7 @@
 
 (deftest handler-search-route
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (memory/create! conn "alice" {:content "deploy to the pi" :src "engram-deploy"
                                     :tags [["domain" "clojure"] ["tech" "datalevin"]]})
@@ -939,7 +968,7 @@
 
 (deftest handler-delete
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (let [resp (request app :post "/memories"
                           {:user "alice" :accept "application/json"
@@ -955,7 +984,7 @@
 
 (deftest handler-token-format
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "a malformed src returns 400 (coercion)"
         (is (== 400 (:status (request app :post "/memories"
@@ -972,7 +1001,7 @@
 
 (deftest handler-malformed-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "a non-uuid id on PUT is a coercion failure, returning 400"
         (is (== 400 (:status (request app :put "/memories/not-a-uuid"
@@ -985,7 +1014,7 @@
 
 (deftest handler-malformed-user
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "a user id that is not a token is rejected with 400"
         (is (== 400 (:status (request app :get "/config"
@@ -997,7 +1026,7 @@
 
 (deftest handler-batch
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "a grouped-map batch of creates returns 200 with ids and an applied count"
         (let [resp (request app :post "/memories/batch"
@@ -1050,7 +1079,7 @@
 
 (deftest recall-json-fallback-shape
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (request app :post "/memories"
                {:user "alice" :accept "application/json"
@@ -1074,9 +1103,134 @@
                                        :body {:pairs [["domain" "clojure"]]}})))))
       (finally (d/close conn)))))
 
+;; ---------- per-memory recall count (ticket 13) ----------
+
+(deftest memory-recall-schema-and-no-backfill
+  (let [conn (fresh-conn)]
+    (try
+      (testing "migration 003 added the three recall attributes"
+        (is (= :db.type/long    (get-in (d/schema conn) [:memory/recall-lifetime :db/valueType])))
+        (is (= :db.type/double  (get-in (d/schema conn) [:memory/recall-decayed :db/valueType])))
+        (is (= :db.type/instant (get-in (d/schema conn) [:memory/last-recalled :db/valueType]))))
+      (memory/create! conn "alice" {:content "x" :src "s" :tags [["domain" "clojure"]]})
+      (testing "a never-recalled memory carries no recall count"
+        (is (empty? (mem-counts conn "alice"))))
+      (finally (d/close conn)))))
+
+(deftest plan-memory-recalls-pure-and-coalesced
+  (let [conn (fresh-conn)]
+    (try
+      (let [id (memory/create! conn "alice" {:content "m" :src "m" :tags [["domain" "clojure"]]})]
+        (testing "a first count starts the lifetime and the decayed weight at the count"
+          (let [tx (stats/plan-memory-recalls (d/db conn) 14 {id 2} (System/currentTimeMillis))]
+            (is (== 1 (count tx)))
+            (is (== 2 (:memory/recall-lifetime (first tx))))
+            (is (== 2.0 (:memory/recall-decayed (first tx))))
+            (is (instance? java.util.Date (:memory/last-recalled (first tx))))))
+        (testing "an empty id-counts plans nothing"
+          (is (= [] (stats/plan-memory-recalls (d/db conn) 14 {} (System/currentTimeMillis)))))
+        (testing "the planner writes nothing"
+          (is (empty? (mem-counts conn "alice"))))
+        (testing "a later count adds to the stored lifetime and decays the prior weight"
+          (d/transact! conn (stats/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis)))
+          (let [tx (stats/plan-memory-recalls (d/db conn) 14 {id 1} (System/currentTimeMillis))]
+            (is (== 4 (:memory/recall-lifetime (first tx))))
+            (is (< 3.0 (:memory/recall-decayed (first tx)) 4.001)))))
+      (finally (d/close conn)))))
+
+(deftest memory-recall-count-records-on-recall-by-tags
+  (let [conn (fresh-conn)
+        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+    (try
+      ;; a matches the tag and links to b; b is pulled in only by the closure.
+      (request app :post "/memories" {:user "alice" :accept "application/json"
+                                      :body {:content "fa" :src "a" :tags [["domain" "clojure"]] :related ["b"]}})
+      (request app :post "/memories" {:user "alice" :accept "application/json"
+                                      :body {:content "fb" :src "b" :tags [["domain" "clojure"]]}})
+      (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/json"
+                                                     :body {:tags [["domain" "clojure"]]}})
+      (stat-writer/drain! mw)
+      (let [by-src (mem-counts conn "alice")]
+        (testing "the tag match gains a recall count"
+          (is (== 1 (get-in by-src ["a" :lifetime])))
+          (is (pos? (get-in by-src ["a" :decayed]))))
+        (testing "the closure memory gains a recall count too"
+          (is (== 1 (get-in by-src ["b" :lifetime]))))
+        (testing "every counted memory carries a last-recalled stamp"
+          (is (every? :last-recalled (vals by-src)))))
+      (finally (d/close conn)))))
+
+(deftest memory-recall-count-records-on-recall-by-ids
+  (let [conn (fresh-conn)
+        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+    (try
+      (let [a (:id (body-json (request app :post "/memories"
+                                       {:user "alice" :accept "application/json"
+                                        :body {:content "fa" :src "a" :tags [["domain" "clojure"]] :related ["b"]}})))]
+        (request app :post "/memories" {:user "alice" :accept "application/json"
+                                        :body {:content "fb" :src "b" :tags [["domain" "clojure"]]}})
+        (request app :post "/memories/recall/by-ids" {:user "alice" :accept "application/json" :body {:ids [a]}})
+        (stat-writer/drain! mw)
+        (let [by-src (mem-counts conn "alice")]
+          (testing "the id and its closure each gain a recall count"
+            (is (== 1 (get-in by-src ["a" :lifetime])))
+            (is (== 1 (get-in by-src ["b" :lifetime]))))))
+      (finally (d/close conn)))))
+
+(deftest search-does-not-record-memory-recall-count
+  (let [conn (fresh-conn)
+        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+    (try
+      (request app :post "/memories" {:user "alice" :accept "application/json"
+                                      :body {:content "deploy to the pi" :src "deploy" :tags [["domain" "clojure"]]}})
+      (request app :post "/memories/search" {:user "alice" :accept "application/json" :body {:search "deploy"}})
+      (stat-writer/drain! mw)
+      (testing "a search records no memory recall count"
+        (is (empty? (mem-counts conn "alice"))))
+      (finally (d/close conn)))))
+
+(deftest memory-recall-count-off-the-wire-and-off-updated-at
+  (let [conn (fresh-conn)
+        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+    (try
+      (let [id     (:id (body-json (request app :post "/memories"
+                                            {:user "alice" :accept "application/json"
+                                             :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})))
+            before (updated-at conn id)
+            resp   (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/json"
+                                                                  :body {:tags [["domain" "clojure"]]}})
+            mem    (first (:memories (body-json resp)))]
+        (stat-writer/drain! mw)
+        (testing "the recall wire carries no recall-count keys"
+          (is (= #{:id :content :src :tags} (set (keys mem)))))
+        (testing "the memory was counted"
+          (is (== 1 (get-in (mem-counts conn "alice") ["s" :lifetime]))))
+        (testing "the count write did not bump updated-at"
+          (is (= before (updated-at conn id)))))
+      (finally (d/close conn)))))
+
+(deftest memory-recall-count-records-over-ndjson-stream
+  (let [conn (fresh-conn)
+        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+    (try
+      (request app :post "/memories" {:user "alice" :accept "application/json"
+                                      :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})
+      (let [resp (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/x-ndjson"
+                                                                :body {:tags [["domain" "clojure"]]}})]
+        (slurp (:body resp))                         ; realize the stream, which taps the ids
+        (stat-writer/drain! mw)
+        (testing "the streamed recall records the delivered memory"
+          (is (== 1 (get-in (mem-counts conn "alice") ["s" :lifetime])))))
+      (finally (d/close conn)))))
+
 (deftest handler-stats-carries-link-density
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (memory/create! conn "alice" {:content "a" :src "a" :tags [["domain" "clojure"]] :related ["b"]})
       (memory/create! conn "alice" {:content "b" :src "b" :tags [["domain" "clojure"]]})
@@ -1094,7 +1248,7 @@
 
 (deftest handler-stats-conforming-fraction
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       ;; two conforming, one not: 2/3 = 0.6666... truncated to four decimals
       (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]]})
@@ -1108,7 +1262,7 @@
 
 (deftest handler-recalls-route
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (memory/create! conn "alice" {:content "m1" :src "a" :tags [["domain" "clojure"]]})
       (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "clojure"] ["tech" "datalevin"]]})
@@ -1142,7 +1296,7 @@
               :configurations [{"scope" {:cardinality "?" :one-of ["global" "project"]} "domain" "+"}]}
         c    (assoc raw :tag-schema (config/compile-tag-schema raw))
         conn (fresh-conn)
-        app  (handler/app conn c (stat-writer/writer conn 14))]
+        app  (test-app conn c)]
     (try
       (let [body  (body-json (request app :get "/config" {:user "alice" :accept "application/json"}))
             scope (get-in body [:configurations 0 :scope])]
@@ -1153,7 +1307,7 @@
 
 (deftest error-logging-and-correlation-id
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "every response carries a correlation-id header"
         (is (some? (get-in (request app :get "/healthz" {:accept "application/json"})
@@ -1171,7 +1325,7 @@
 
 (deftest healthz-reports-the-version
   (let [conn (fresh-conn)
-        app  (handler/app conn cfg (stat-writer/writer conn (:half-life-days cfg)))]
+        app  (test-app conn)]
     (try
       (testing "/healthz returns the build version, dev in a source tree"
         (let [body (body-json (request app :get "/healthz" {:accept "application/json"}))]

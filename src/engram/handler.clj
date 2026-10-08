@@ -33,18 +33,27 @@
 
 (defn- ndjson-response
   "Stream a header line, then one JSON line per memory, without truncation and
-  without holding the whole result in memory."
-  [header mems]
-  {:status 200
-   :headers {"Content-Type" "application/x-ndjson"}
-   :body (rio/piped-input-stream
-          (fn [out]
-            (with-open [w (io/writer out)]
-              (.write w (json/write-value-as-string header))
-              (.write w "\n")
-              (doseq [m mems]
-                (.write w (json/write-value-as-string m))
-                (.write w "\n")))))})
+  without holding the whole result in memory. With `after-ids`, tap each
+  delivered memory's id and hand the delivered id vector to `after-ids` once the
+  stream ends, so the write side gets only the ids and a partial delivery still
+  reports its delivered prefix."
+  ([header mems] (ndjson-response header mems nil))
+  ([header mems after-ids]
+   {:status 200
+    :headers {"Content-Type" "application/x-ndjson"}
+    :body (rio/piped-input-stream
+           (fn [out]
+             (with-open [w (io/writer out)]
+               (.write w (json/write-value-as-string header))
+               (.write w "\n")
+               (let [ids (volatile! (transient []))]
+                 (try
+                   (doseq [m mems]
+                     (.write w (json/write-value-as-string m))
+                     (.write w "\n")
+                     (vswap! ids conj! (:id m)))
+                   (finally
+                     (when after-ids (after-ids (persistent! @ids)))))))))}))
 
 (defn- wants-ndjson? [req]
   (boolean (some-> (get-in req [:headers "accept"])
@@ -52,22 +61,28 @@
 
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
-(defn- recall-handler [conn writer req]
-  (let [user (:engram/user req)
-        tags (get-in req [:parameters :body :tags])]
-    (stat-writer/record! writer user tags)
-    (let [mems (memory/recall-by-tags conn user tags)]
-      (if (wants-ndjson? req)
-        (ndjson-response {:header true :tags tags} mems)
-        {:status 200 :body {:tags tags :memories (vec mems)}}))))
-
-(defn- recall-by-ids-handler [conn req]
-  (let [user (:engram/user req)
-        ids  (get-in req [:parameters :body :ids])
-        mems (memory/recall-by-ids conn user ids)]
+(defn- recall-by-tags-handler [conn tag-writer mem-writer req]
+  (let [user   (:engram/user req)
+        tags   (get-in req [:parameters :body :tags])
+        mems   (memory/recall-by-tags conn user tags)
+        record (fn [ids] (stat-writer/record-memories! mem-writer user ids))]
+    (stat-writer/record-pairs! tag-writer user tags)
     (if (wants-ndjson? req)
-      (ndjson-response {:header true :ids ids} mems)
-      {:status 200 :body {:ids ids :memories (vec mems)}})))
+      (ndjson-response {:header true :tags tags} mems record)
+      (let [v (vec mems)]
+        (record (mapv :id v))
+        {:status 200 :body {:tags tags :memories v}}))))
+
+(defn- recall-by-ids-handler [conn mem-writer req]
+  (let [user   (:engram/user req)
+        ids    (get-in req [:parameters :body :ids])
+        mems   (memory/recall-by-ids conn user ids)
+        record (fn [rids] (stat-writer/record-memories! mem-writer user rids))]
+    (if (wants-ndjson? req)
+      (ndjson-response {:header true :ids ids} mems record)
+      (let [v (vec mems)]
+        (record (mapv :id v))
+        {:status 200 :body {:ids ids :memories v}}))))
 
 (defn- memories-handler [conn req]
   (let [user (:engram/user req)]
@@ -191,8 +206,9 @@
 
 (defn- routes
   "The reitit route table, closing over the db conn, the loaded config, and the
-  stat-write consumer."
-  [conn cfg writer]
+  two stat-write consumers: the tag writer for pair counts and the memory writer
+  for per-memory counts."
+  [conn cfg tag-writer mem-writer]
   [["/swagger.json"
     {:get {:no-doc true
            :swagger {:info {:title "engram" :version build-info/version
@@ -225,9 +241,9 @@
     ;; ids (by-ids). No :responses: the NDJSON stream cannot be response-coerced
     ;; (see schema/RecallOut). Both are static paths, resolving ahead of /memories/:id.
     ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByTagsBody}
-                                        :handler (fn [req] (recall-handler conn writer req))}}]
+                                        :handler (fn [req] (recall-by-tags-handler conn tag-writer mem-writer req))}}]
     ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
-                                       :handler (fn [req] (recall-by-ids-handler conn req))}}]
+                                       :handler (fn [req] (recall-by-ids-handler conn mem-writer req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
     ;; Static path, resolves ahead of /memories/:id. Bounded result, so it is response-coerced.
@@ -246,11 +262,11 @@
 
 (defn app
   "Build the ring handler over the (opaque) db conn, the loaded config, and the
-  stat-write consumer."
-  [conn cfg writer]
+  two stat-write consumers, the tag writer and the memory writer."
+  [conn cfg tag-writer mem-writer]
   (-> (ring/ring-handler
        (ring/router
-        (routes conn cfg writer)
+        (routes conn cfg tag-writer mem-writer)
         {:conflicts nil
          :data {:coercion   rcm/coercion
                 :muuntaja   mc/instance

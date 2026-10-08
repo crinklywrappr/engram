@@ -14,7 +14,7 @@
   planner. The operational consumer, which owns the agent and the executors,
   lives in `engram.stats.writer`."
   (:require [datalevin.core :as d])
-  (:import [java.util Date]))
+  (:import [java.util Date UUID]))
 
 (defn- decay-factor
   "The fraction of a decayed weight that remains after `elapsed-ms`, given the
@@ -145,6 +145,64 @@
   `engram.stats.writer`."
   [pending-recalls]
   (reduce (fn [m [[user c l] n]] (assoc-in m [user [c l]] n)) {} pending-recalls))
+
+;; ---------- per-memory recall count ----------
+
+(defn- extant-memory-recall
+  "The memory's stored recall columns [lifetime decayed last-recalled], or nil
+  when the memory carries no recall count yet (its first recall)."
+  [db ^UUID uuid]
+  (d/q '[:find [?life ?dec ?last]
+         :in $ ?id
+         :where [?e :memory/id ?id]
+                [?e :memory/recall-lifetime ?life]
+                [?e :memory/recall-decayed ?dec]
+                [?e :memory/last-recalled ?last]]
+       db uuid))
+
+(defn plan-memory-recalls
+  "Pure. Build the batched memory-recall transaction over `id-counts`, a map of
+  memory-id string to a coalesced count. For each id, read the memory's current
+  recall columns, decay the stored weight to `flush-ms`, and add the count to
+  both the lifetime and the decayed weight. The upsert is by `:memory/id`. Return
+  a vector of tx-maps, empty when `id-counts` is empty. Take no connection and
+  perform no write."
+  [db half-life-days id-counts flush-ms]
+  (mapv (fn [[id n]]
+          (let [uuid (UUID/fromString id)
+                [life decayed ^Date last] (extant-memory-recall db uuid)
+                base (if last (project-decayed half-life-days decayed last flush-ms) 0.0)]
+            {:memory/id              uuid
+             :memory/recall-lifetime (+ (long (or life 0)) (long n))
+             :memory/recall-decayed  (+ base (double n))
+             :memory/last-recalled   (Date. (long flush-ms))}))
+        id-counts))
+
+;; ---------- recall-count write strategies ----------
+;;
+;; One kind of recall count per record. The async stat writer holds a strategy
+;; and stays agnostic: `->pending` folds recorded items into the pending map on
+;; the absorb step, and `->writes` turns the pending map into tx-data at flush.
+;; A later kind of counted read adds a third record without touching the writer.
+
+(defprotocol RecallCountWritable
+  (->pending [strategy pending user xs])
+  (->writes  [strategy pending db flush-ms]))
+
+(defrecord TagRecallCount [half-life-days]
+  RecallCountWritable
+  (->pending [_ pending user pairs]
+    (reduce (fn [b [c l]] (update b [user c l] (fnil inc 0))) pending pairs))
+  (->writes [_ pending db flush-ms]
+    (vec (mapcat (fn [[user pcs]] (plan-recalls db user half-life-days pcs flush-ms))
+                 (by-user pending)))))
+
+(defrecord MemoryRecallCount [half-life-days]
+  RecallCountWritable
+  (->pending [_ pending _user ids]
+    (reduce (fn [b id] (update b id (fnil inc 0))) pending ids))
+  (->writes [_ pending db flush-ms]
+    (plan-memory-recalls db half-life-days pending flush-ms)))
 
 ;; ---------- link density ----------
 
