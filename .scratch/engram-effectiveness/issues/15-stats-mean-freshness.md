@@ -4,15 +4,15 @@
 
 **Blocked by:** 13 (Record a recall count for each memory) and 14 (Add the per-memory freshness flag and the confirm route).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `/stats` reports the plain mean freshness, with every memory weighted equally.
-- [ ] `/stats` reports the use-weighted mean freshness, weighted by the recent recall count.
-- [ ] `/stats` reports the hot-and-stale fraction.
-- [ ] A hot memory has a recent recall count at or above 0.5.
-- [ ] A stale memory sits in the stale band from ticket 14.
-- [ ] Each value is a single decimal truncated to four decimal places.
-- [ ] When no memory has a recent count, the use-weighted mean falls back to the plain mean.
-- [ ] The computation covers only the caller's own memories.
-- [ ] The three aggregates and the conforming fraction share one pass.
-- [ ] The `/stats` response schema names the three new fields.
+- [x] `/stats` reports the plain mean freshness, with every memory weighted equally.
+- [x] `/stats` reports the use-weighted mean freshness, weighted by the recent recall count.
+- [x] `/stats` reports the hot-and-stale fraction.
+- [x] A hot memory has a recent recall count at or above 0.5.
+- [x] A stale memory sits in the stale band from ticket 14.
+- [x] Each value is a single decimal truncated to four decimal places.
+- [x] When no memory has a recent count, the use-weighted mean falls back to the plain mean.
+- [x] The computation covers only the caller's own memories.
+- [x] The three aggregates and the conforming fraction share one pass.
+- [x] The `/stats` response schema names the three new fields.

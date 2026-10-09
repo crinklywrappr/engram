@@ -24,19 +24,19 @@ The per-memory age resolution, `(or last-confirmed updated-at created-at)`, live
 
 **Blocked by:** 13 (Record a per-memory recall count) and 14 (Add the per-memory freshness band and the confirm route). Both are done.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `GET /memories/stale` returns the caller's stale memories, as a static path ahead of `/memories/:id`.
-- [ ] A stale memory sits in the stale band from ticket 14.
-- [ ] The route orders the memories by confirm-priority, highest first.
-- [ ] confirm-priority is staleness times the recent recall count, where staleness is one minus freshness.
-- [ ] The recent recall count is the per-memory decayed count projected to now by the recall half-life.
-- [ ] A stale memory with no recent recalls scores zero and sorts to the bottom.
-- [ ] A tie breaks by `src` then id, so the order is deterministic.
-- [ ] The response is a not-truncated NDJSON stream in the recall wire shape, with no score.
-- [ ] Phase one is a datalog query that returns only the sort columns, pre-filtered by `created-at`.
-- [ ] The `created-at` pre-filter drops no stale memory, because `created-at` is the floor of the effective last-confirmed.
-- [ ] Phase two lazily pulls each full wire memory in sorted order, so the full set never sits in memory at once.
-- [ ] Another user's memories never appear in the response.
-- [ ] `CONTEXT.md` defines Confirm priority and Staleness.
-- [ ] The shared age resolution is extracted into one place and reused, not duplicated a third time.
+- [x] `GET /memories/stale` returns the caller's stale memories, as a static path ahead of `/memories/:id`.
+- [x] A stale memory sits in the stale band from ticket 14.
+- [x] The route orders the memories by confirm-priority, highest first.
+- [x] confirm-priority is staleness times the recent recall count, where staleness is one minus freshness.
+- [x] The recent recall count is the per-memory decayed count projected to now by the recall half-life.
+- [x] A stale memory with no recent recalls scores zero and sorts to the bottom.
+- [x] A tie breaks by `src` then id, so the order is deterministic.
+- [x] The response is a not-truncated NDJSON stream in the recall wire shape, with no score.
+- [x] Phase one is a datalog query that returns only the sort columns, pre-filtered by `created-at`.
+- [x] The `created-at` pre-filter drops no stale memory, because `created-at` is the floor of the effective last-confirmed.
+- [x] Phase two lazily pulls each full wire memory in sorted order, so the full set never sits in memory at once.
+- [x] Another user's memories never appear in the response.
+- [x] `CONTEXT.md` defines Confirm priority and Staleness.
+- [x] The shared age resolution is extracted into one place and reused, not duplicated a third time.
