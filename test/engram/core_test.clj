@@ -290,9 +290,64 @@
       (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})  ; no domain
       (memory/create! conn "bob"   {:content "zz" :src "zz" :tags [["tech" "datalevin"]]})      ; other user
       (testing "the fraction is conforming over total, for the caller only"
-        (is (== 0.75 (memory/conforming-fraction conn "alice" reject? 30))))   ; 3 of 4 conform
+        (is (== 0.75 (:conforming-fraction (stats/memory-aggregates conn "alice" reject? 30 14)))))   ; 3 of 4 conform
       (testing "a user with no memories gets 0.0"
-        (is (== 0.0 (memory/conforming-fraction conn "nobody" reject? 30))))
+        (is (== 0.0 (:conforming-fraction (stats/memory-aggregates conn "nobody" reject? 30 14)))))
+      (finally (d/close conn)))))
+
+;; ---------- freshness aggregates (ticket 15) ----------
+
+(deftest aggregate-memories-computes-the-four-aggregates
+  (let [now     1000000000000
+        day     86400000
+        d-ago   (fn [n] (java.util.Date. (- now (* n day))))
+        tag     (fn [c l] {:tag/category c :tag/label l})
+        ;; reject? marks a memory nonconforming when it carries no domain pair
+        reject? (fn [tags] (not (some (fn [[c _]] (= c "domain")) tags)))
+        close?  (fn [x y] (< (Math/abs (double (- x y))) 1e-9))
+        ;; A: conforming, fresh (age 0), hot (recent 1.0), not stale
+        a {:memory/tag [(tag "domain" "clojure")] :memory/last-confirmed (d-ago 0)
+           :memory/recall-decayed 1.0 :memory/last-recalled (d-ago 0)}
+        ;; B: conforming, stale (25 days at a 10-day half-life = 2.5 half-lives), hot (recent 2.0)
+        b {:memory/tag [(tag "domain" "databases")] :memory/last-confirmed (d-ago 25)
+           :memory/recall-decayed 2.0 :memory/last-recalled (d-ago 0)}
+        ;; C: nonconforming (no tags), aging (5 days = 0.5 half-life), never recalled
+        c {:memory/last-confirmed (d-ago 5)}
+        agg (stats/aggregate-memories [a b c] reject? 10 14 now)]
+    (testing "the conforming fraction is conforming over total"
+      (is (close? (/ 2.0 3.0) (:conforming-fraction agg))))
+    (testing "the plain mean freshness weights every memory equally"
+      (is (close? (/ (+ 1.0 (Math/pow 0.5 2.5) (Math/pow 0.5 0.5)) 3.0)
+                  (:mean-freshness agg))))
+    (testing "the use-weighted mean weights each memory by its recent recall count"
+      (is (close? (/ (+ (* 1.0 1.0) (* 2.0 (Math/pow 0.5 2.5))) 3.0)
+                  (:use-weighted-freshness agg))))
+    (testing "the hot-and-stale fraction counts only memories both hot and stale"
+      (is (close? (/ 1.0 3.0) (:hot-and-stale-fraction agg))))))
+
+(deftest aggregate-memories-use-weighted-falls-back-to-plain-mean
+  (let [now 1000000000000
+        day 86400000
+        m1  {:memory/last-confirmed (java.util.Date. (- now (* 5 day)))}
+        m2  {:memory/last-confirmed (java.util.Date. (- now (* 15 day)))}
+        agg (stats/aggregate-memories [m1 m2] (constantly nil) 10 14 now)]
+    (testing "with no recent counts, the use-weighted mean equals the plain mean"
+      (is (== (:mean-freshness agg) (:use-weighted-freshness agg))))))
+
+(deftest aggregate-memories-empty-store-is-zero
+  (testing "a caller with no memories gets 0.0 for every aggregate"
+    (is (= {:conforming-fraction 0.0 :mean-freshness 0.0
+            :use-weighted-freshness 0.0 :hot-and-stale-fraction 0.0}
+           (stats/aggregate-memories [] (constantly nil) 10 14 1000000000000)))))
+
+(deftest aggregate-memories-covers-only-the-callers-memories
+  (let [conn    (fresh-conn)
+        reject? #(config/tag-error (:tag-schema cfg) %)]
+    (try
+      (memory/create! conn "alice" {:content "a" :src "a" :tags [["domain" "clojure"]]})
+      (memory/create! conn "bob"   {:content "z" :src "z" :tags [["tech" "datalevin"]]})
+      (testing "alice's aggregates ignore bob's nonconforming memory"
+        (is (== 1.0 (:conforming-fraction (stats/memory-aggregates conn "alice" reject? 30 14)))))
       (finally (d/close conn)))))
 
 (deftest fetch-returns-owned-memory
@@ -1271,6 +1326,24 @@
           (is (== 0.6666 f))))
       (finally (d/close conn)))))
 
+(deftest handler-stats-freshness-aggregates
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (memory/create! conn "alice" {:content "m1" :src "a" :tags [["domain" "clojure"]]})
+      (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "databases"]]})
+      (let [s (:stats (body-json (request app :get "/stats" {:user "alice" :accept "application/json"})))]
+        (testing "the stats body names the three freshness aggregates, each numeric"
+          (is (number? (:mean-freshness s)))
+          (is (number? (:use-weighted-freshness s)))
+          (is (number? (:hot-and-stale-fraction s))))
+        (testing "a just-created store is fully fresh and nothing is hot-and-stale"
+          (is (<= 0.9999 (:mean-freshness s) 1.0))
+          (is (== 0.0 (:hot-and-stale-fraction s))))
+        (testing "with no recalls, the use-weighted mean falls back to the plain mean"
+          (is (== (:mean-freshness s) (:use-weighted-freshness s)))))
+      (finally (d/close conn)))))
+
 (deftest handler-recalls-route
   (let [conn (fresh-conn)
         app  (test-app conn)]
@@ -1358,7 +1431,11 @@
     (is (= "aging" (freshness/band 30 (* 30 day-ms))))     ; one half-life -> aging
     (is (= "aging" (freshness/band 30 (* 59 day-ms))))
     (is (= "stale" (freshness/band 30 (* 60 day-ms))))     ; two half-lives -> stale
-    (is (= "stale" (freshness/band 30 (* 120 day-ms))))))
+    (is (= "stale" (freshness/band 30 (* 120 day-ms)))))
+  (testing "stale? is true only in the stale band"
+    (is (not (freshness/stale? 30 (* 59 day-ms))))
+    (is (freshness/stale? 30 (* 60 day-ms)))
+    (is (freshness/stale? 30 (* 120 day-ms)))))
 
 (deftest last-confirmed-schema-and-stamping
   (let [conn (fresh-conn)]

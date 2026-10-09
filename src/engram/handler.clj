@@ -126,11 +126,16 @@
   (/ (Math/floor (* (double x) 10000.0)) 10000.0))
 
 (defn- stats-handler [conn cfg req]
-  (let [user (:engram/user req)]
+  (let [user (:engram/user req)
+        agg  (stats/memory-aggregates conn user (tag-reject cfg)
+                                      (:freshness-half-life-days cfg)
+                                      (:recall-half-life-days cfg))]
     {:status 200
-     :body {:stats {:link-density       (stats/link-density conn user)
-                    :conforming-fraction (trunc4 (memory/conforming-fraction conn user (tag-reject cfg)
-                                                                              (:freshness-half-life-days cfg)))}}}))
+     :body {:stats {:link-density           (stats/link-density conn user)
+                    :conforming-fraction    (trunc4 (:conforming-fraction agg))
+                    :mean-freshness         (trunc4 (:mean-freshness agg))
+                    :use-weighted-freshness (trunc4 (:use-weighted-freshness agg))
+                    :hot-and-stale-fraction (trunc4 (:hot-and-stale-fraction agg))}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations

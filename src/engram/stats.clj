@@ -13,7 +13,8 @@
   This namespace is the functional core: the read projection and the pure
   planner. The operational consumer, which owns the agent and the executors,
   lives in `engram.stats.writer`."
-  (:require [datalevin.core :as d])
+  (:require [datalevin.core :as d]
+            [engram.freshness :as freshness])
   (:import [java.util Date UUID]))
 
 (defn- decay-factor
@@ -203,6 +204,96 @@
     (reduce (fn [b id] (update b id (fnil inc 0))) pending ids))
   (->writes [_ pending db flush-ms]
     (plan-memory-recalls db half-life-days pending flush-ms)))
+
+;; ---------- memory aggregates (conformance + freshness) ----------
+;;
+;; One pass over the caller's memories feeds every /stats aggregate that scans
+;; the whole store: the conforming fraction (ticket 09) and the three freshness
+;; aggregates (ticket 15). The read pulls each memory once; the reduce is pure.
+
+(def ^:private hot-threshold
+  "The recent recall count at or above which a memory counts as hot: about one
+  recall within the last half-life."
+  0.5)
+
+(defn- aggregate-rows
+  "Pull each of the caller's memories once, with the columns the /stats
+  aggregates need: the tags for conformance, the freshness timestamps, and the
+  recall-count columns for the recent count."
+  [db user]
+  (d/q '[:find [(pull ?e [:memory/last-confirmed :memory/updated-at :memory/created-at
+                          :memory/recall-decayed :memory/last-recalled
+                          {:memory/tag [:tag/category :tag/label]}]) ...]
+         :in $ ?u
+         :where [?e :memory/user ?u]]
+       db user))
+
+(defn- recent-count
+  "The memory's recent recall count projected to `now`: the stored decayed weight
+  decayed by the recall half-life since its last recall, or 0.0 when the memory
+  was never recalled."
+  [recall-half-life-days m ^long now]
+  (if-let [^Date last (:memory/last-recalled m)]
+    (project-decayed recall-half-life-days (:memory/recall-decayed m) last now)
+    0.0))
+
+(defn aggregate-memories
+  "Pure. Reduce the caller's pulled memory `rows` into the /stats whole-store
+  aggregates, in one pass. `reject?` is the conformance predicate: it takes a
+  memory's [category label] pairs and returns truthy when the memory conforms to
+  no configuration. `freshness-half-life-days` shapes each memory's freshness
+  value and its stale band. `recall-half-life-days` shapes each memory's recent
+  recall count. `now` is the clock in epoch millis.
+
+  Return a map of:
+  - :conforming-fraction, the share of memories that conform.
+  - :mean-freshness, the plain mean freshness value, every memory weighted
+    equally. A higher value means a fresher store.
+  - :use-weighted-freshness, the mean freshness value weighted by each memory's
+    recent recall count, so the facts the caller loads most shape it most. It
+    falls back to the plain mean when no memory has a recent count.
+  - :hot-and-stale-fraction, the share of memories that are both hot (a recent
+    count at or above 0.5) and stale (in the stale band). A higher value means
+    more of the store is used but overdue.
+
+  Every value is 0.0 when the caller owns no memory."
+  [rows reject? freshness-half-life-days recall-half-life-days now]
+  (let [{:keys [total conforming sum-fresh sum-recent sum-weighted hot-stale]}
+        (reduce
+         (fn [a m]
+           (let [tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))
+                 ^Date t (or (:memory/last-confirmed m) (:memory/updated-at m) (:memory/created-at m))
+                 age     (- now (.getTime t))
+                 fv      (freshness/value freshness-half-life-days age)
+                 stale?  (freshness/stale? freshness-half-life-days age)
+                 recent  (recent-count recall-half-life-days m now)
+                 hot?    (>= recent hot-threshold)]
+             (cond-> (-> a
+                         (update :total inc)
+                         (update :sum-fresh + fv)
+                         (update :sum-recent + recent)
+                         (update :sum-weighted + (* recent fv)))
+               (not (reject? tags)) (update :conforming inc)
+               (and hot? stale?)    (update :hot-stale inc))))
+         {:total 0 :conforming 0 :sum-fresh 0.0 :sum-recent 0.0 :sum-weighted 0.0 :hot-stale 0}
+         rows)]
+    (if (zero? total)
+      {:conforming-fraction 0.0 :mean-freshness 0.0 :use-weighted-freshness 0.0 :hot-and-stale-fraction 0.0}
+      (let [mean-fresh (/ sum-fresh (double total))]
+        {:conforming-fraction    (/ conforming (double total))
+         :mean-freshness         mean-fresh
+         :use-weighted-freshness (if (pos? sum-recent) (/ sum-weighted sum-recent) mean-fresh)
+         :hot-and-stale-fraction (/ hot-stale (double total))}))))
+
+(defn memory-aggregates
+  "The caller's /stats whole-store aggregates in one pass: the conforming
+  fraction and the three freshness aggregates. `reject?` injects the conformance
+  check. The half-lives are the admin recall and freshness half-lives in days.
+  See `aggregate-memories` for the returned map."
+  [conn user reject? freshness-half-life-days recall-half-life-days]
+  (aggregate-memories (aggregate-rows (d/db conn) user)
+                      reject? freshness-half-life-days recall-half-life-days
+                      (System/currentTimeMillis)))
 
 ;; ---------- link density ----------
 

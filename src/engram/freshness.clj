@@ -31,3 +31,10 @@
       (> v 0.5)  "fresh"
       (> v 0.25) "aging"
       :else      "stale")))
+
+(defn stale?
+  "True when `age-ms` at the half-life in days falls in the stale band, that is
+  two half-lives or beyond since the last confirmation. The one place a caller
+  asks about staleness, so the band spelling stays owned here."
+  [half-life-days age-ms]
+  (= "stale" (band half-life-days age-ms)))
