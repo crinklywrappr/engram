@@ -1,8 +1,9 @@
 (ns engram.config
   "The admin-authored category config, loaded from a mounted EDN file (not
-  shipped with the server). It holds the stats half-life and an array of
-  acceptable configurations. A configuration is a map of category to a
-  cardinality shorthand.
+  shipped with the server). It holds two half-lives and an array of acceptable
+  configurations. The recall half-life shapes the recent recall count. The
+  freshness half-life shapes a memory's freshness. A configuration is a map of
+  category to a cardinality shorthand.
 
   Validation is malli. `compile-tag-schema` turns the configurations into a
   schema once at load time. A memory is valid when its category:label pairs,
@@ -20,6 +21,15 @@
 (def token-regex #"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 (def Token [:re {:error/message "should be a lowercase kebab-case token"} token-regex])
 (def Pair [:tuple Token Token])                 ; a [category label] pair
+
+;; The half-life defaults, merged into every loaded config so each reader sees a
+;; complete map. The recall half-life shapes the recent recall count on tags and
+;; memories. The freshness half-life shapes a memory's freshness band.
+(def default-recall-half-life-days 14)
+(def default-freshness-half-life-days 30)
+(def ^:private half-life-defaults
+  {:recall-half-life-days    default-recall-half-life-days
+   :freshness-half-life-days default-freshness-half-life-days})
 
 ;; A configuration maps each category to a cardinality shorthand, or to a
 ;; value-set map {:cardinality shorthand :one-of [label ...]} that closes the
@@ -70,13 +80,25 @@
   [config]
   (into #{} (mapcat keys) (:configurations config)))
 
+(defn- validate-half-life
+  "Throw when `config` names `k` as anything but a positive number. An absent
+  half-life is valid, because `load-config` supplies the default."
+  [config k]
+  (when-let [v (get config k)]
+    (when-not (and (number? v) (pos? v))
+      (throw (ex-info (str "config " k " must be a positive number")
+                      {:key k :value v})))))
+
 (defn validate-config
   "Return `config` when valid, else throw. The :configurations must match a vector
   of category-to-`CategorySpec` maps, so each category value is a cardinality
-  shorthand or a value-set map. The :categories map is optional. When present, it
-  must match the Categories shape, and every described category must appear in some
+  shorthand or a value-set map. Each half-life, when named, must be a positive
+  number. The :categories map is optional. When present, it must match the
+  Categories shape, and every described category must appear in some
   configuration, because describing an unused category is a mistake."
   [config]
+  (validate-half-life config :recall-half-life-days)
+  (validate-half-life config :freshness-half-life-days)
   (let [schema [:vector [:map-of :string CategorySpec]]]
     (when-not (m/validate schema (:configurations config))
       (throw (ex-info "config :configurations is malformed"
@@ -92,9 +114,12 @@
   config)
 
 (defn load-config
-  "Load the config map {:half-life-days n :configurations [{cat card} ...]}."
+  "Load the config map and merge the half-life defaults, so every reader sees a
+  complete {:recall-half-life-days n :freshness-half-life-days n :configurations
+  [{cat card} ...]} map. A half-life named in the file overrides its default."
   [default-path]
-  (validate-config (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path)))))
+  (let [raw (validate-config (edn/read-string (slurp (or (getenv "ENGRAM_CONFIG") default-path))))]
+    (merge half-life-defaults raw)))
 
 (defn- element-of
   "The vector element schema of a category value: an enum of the :one-of labels

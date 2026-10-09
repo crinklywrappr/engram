@@ -1,6 +1,10 @@
 ;; engram category config — admin-authored, mounted at deploy time.
 ;;
-;; :half-life-days sets the exponential decay for the recent request count.
+;; :recall-half-life-days sets the exponential decay for the recent recall count,
+;; on tags and on memories. It defaults to 14 when absent.
+;; :freshness-half-life-days sets the decay of a memory's freshness, measured
+;; from its last confirmation. A memory is fresh under one half-life, aging from
+;; one up to two, and stale beyond two. It defaults to 30 when absent.
 ;; :configurations is an array of acceptable configurations. Each is a map of
 ;; category to a cardinality shorthand: "1" exactly one, "?" zero or one,
 ;; "*" zero or more, "+" one or more. A memory is valid if its category:label
@@ -20,7 +24,8 @@
 ;; returns this map on GET /config so the client picks fitting labels.
 ;;
 ;; The categories below are seeded from the user-level CLAUDE.md tag vocabulary.
-{:half-life-days 14
+{:recall-half-life-days 14
+ :freshness-half-life-days 30
  :categories
  {"scope"    {:description "cross-project or project-specific reach of the fact"
               :examples ["global" "project"]}

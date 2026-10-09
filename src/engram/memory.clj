@@ -8,11 +8,13 @@
   in linked memories the pairs did not name."
   (:require [datalevin.core :as d]
             [clojure.set :as st]
-            [engram.errors :as errors])
+            [engram.errors :as errors]
+            [engram.freshness :as freshness])
   (:import [java.util UUID Date]))
 
 (def ^:private pull-pattern
   '[:memory/id :memory/content :memory/src :memory/related
+    :memory/last-confirmed :memory/updated-at :memory/created-at
     {:memory/tag [:tag/category :tag/label]}])
 
 (defn- tag-tuples
@@ -20,16 +22,29 @@
   [m]
   (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m)))
 
+(defn- band-for
+  "A function from a pulled memory to its freshness band, at `half-life` days
+  against one clock captured now. The age runs from the memory's last-confirmed,
+  resolved through updated-at then created-at for a memory that predates the
+  field."
+  [half-life]
+  (let [clock (System/currentTimeMillis)]
+    (fn [m]
+      (let [^Date t (or (:memory/last-confirmed m) (:memory/updated-at m) (:memory/created-at m))]
+        (freshness/band half-life (- clock (.getTime t)))))))
+
 (defn- ->wire
-  "Shape a pulled memory into the JSON wire form. Omit an empty tags vector and
-  an empty related vector, so a bare memory carries no empty key on the recall
-  wire. The recall path carries no timestamps."
-  [m]
+  "Shape a pulled memory into the JSON wire form, with its freshness band. Omit
+  an empty tags vector and an empty related vector, so a bare memory carries no
+  empty key on the recall wire. The recall path carries no timestamps, only the
+  derived band."
+  [band m]
   (let [related (vec (:memory/related m))
         tags    (tag-tuples m)]
-    (cond-> {:id      (str (:memory/id m))
-             :content (:memory/content m)
-             :src     (:memory/src m)}
+    (cond-> {:id        (str (:memory/id m))
+             :content   (:memory/content m)
+             :src       (:memory/src m)
+             :freshness (band m)}
       (seq tags)    (assoc :tags tags)
       (seq related) (assoc :related related))))
 
@@ -48,7 +63,8 @@
                  :memory/content content
                  :memory/src src
                  :memory/created-at now
-                 :memory/updated-at now}
+                 :memory/updated-at now
+                 :memory/last-confirmed now}
           (seq tags)    (assoc :memory/tag (mapv tag-tx tags))
           (seq related) (assoc :memory/related (vec related)))]))
 
@@ -76,7 +92,10 @@
                    (d/q '[:find [?r ...] :in $ ?e :where [?e :memory/related ?r]] db eid))
         retracts (concat (map (fn [t] [:db/retractEntity t]) old-tags)
                          (map (fn [r] [:db/retract eid :memory/related r]) old-rel))
-        base (cond-> {:db/id eid :memory/updated-at (Date.)}
+        now  (Date.)
+        ;; An edit reconfirms the fact, so updated-at and last-confirmed move
+        ;; together, keeping created-at <= updated-at <= last-confirmed.
+        base (cond-> {:db/id eid :memory/updated-at now :memory/last-confirmed now}
                (contains? fields :content) (assoc :memory/content (:content fields))
                (contains? fields :tags)    (assoc :memory/tag (mapv tag-tx (:tags fields)))
                (contains? fields :related) (assoc :memory/related (vec (:related fields))))]
@@ -110,6 +129,20 @@
     (when eid
       (d/transact! conn [[:db/retractEntity eid]])
       id)))
+
+(defn confirm!
+  "Stamp last-confirmed to now for each of `ids` the caller owns, in one
+  transaction. Drop an id the caller does not own and an id that does not exist.
+  Collapse a repeated id to one stamp. Return the number of memories stamped.
+  Never touch updated-at, because a confirm affirms the fact without editing it.
+  `ids` are uuid strings."
+  [conn user ids]
+  (let [db   (d/db conn)
+        now  (Date.)
+        eids (distinct (keep #(eid-of db user %) ids))
+        tx   (mapv (fn [eid] {:db/id eid :memory/last-confirmed now}) eids)]
+    (when (seq tx) (d/transact! conn tx))
+    (count eids)))
 
 ;; ---------- batch ----------
 
@@ -203,10 +236,11 @@
 (defn fetch
   "Return the caller's wire memory by id, or nil when no such memory exists for
   this user. The read before a correction or a delete."
-  [conn user id]
-  (let [db (d/db conn)]
+  [conn user id half-life]
+  (let [db   (d/db conn)
+        band (band-for half-life)]
     (when-let [eid (eid-of db user id)]
-      (->wire (d/pull db pull-pattern eid)))))
+      (->wire band (d/pull db pull-pattern eid)))))
 
 ;; ---------- recall ----------
 
@@ -242,42 +276,46 @@
 
 (defn- query
   "Walk the transitive related-by-src closure, emitting one wire memory per
-  entity as a lazy sequence, deduplicated by `seen`. `pending` is a queue of
-  matched rows awaiting emission, each an `[eid srcs]` pair. `frontier` is the
-  set of related srcs still to expand. `lookup+args` is a sequence of
-  `[lookup arg]` pairs, each a deferred lookup that yields more rows when
-  applied. The emitted values are pulled from `db`, an immutable snapshot, so
-  they stay valid only while the connection that produced it is open."
-  [db user seen pending frontier lookup+args]
+  entity as a lazy sequence, deduplicated by `seen`. `band` is the wire builder's
+  freshness function, or nil for no band. `pending` is a queue of matched rows
+  awaiting emission, each an `[eid srcs]` pair. `frontier` is the set of related
+  srcs still to expand. `lookup+args` is a sequence of `[lookup arg]` pairs, each
+  a deferred lookup that yields more rows when applied. The emitted values are
+  pulled from `db`, an immutable snapshot, so they stay valid only while the
+  connection that produced it is open."
+  [db user band seen pending frontier lookup+args]
   (cond
     (seq pending)
     (loop [[[eid srcs] & more] pending]
       (cond
-        (nil? eid) (lazy-seq (query db user seen [] frontier lookup+args))
+        (nil? eid) (lazy-seq (query db user band seen [] frontier lookup+args))
         (seen eid) (recur more)
-        :else (cons (->wire (d/pull db pull-pattern eid))
+        :else (cons (->wire band (d/pull db pull-pattern eid))
                     (lazy-seq
-                     (query db user (conj seen eid) more
+                     (query db user band (conj seen eid) more
                              (st/union frontier srcs) lookup+args)))))
 
     (seq lookup+args)
     (let [[[lookup arg] & more] lookup+args]
-      (recur db user seen (lookup arg) frontier more))
+      (recur db user band seen (lookup arg) frontier more))
 
     (seq frontier)
-    (recur db user seen pending #{}
+    (recur db user band seen pending #{}
            (conj lookup+args [(partial eids-by-srcs db user)
                               ;; :none is the no-related sentinel, never a real src
                               (disj frontier :none)]))))
 
 (defn recall-by-tags
   "Return a lazy seq of wire memories: the tag matches for `user` plus the
-  transitive related-by-src closure, deduped. Responses are not truncated. The
-  seq is lazy over an immutable db snapshot, so realize it while `conn` is open."
-  [conn user tags]
-  (let [db (d/db conn)
-        f (partial eids-by-tag db user)]
-    (query db user #{} [] #{} (map (partial vector f) tags))))
+  transitive related-by-src closure, deduped. With a `half-life`, each wire
+  memory carries its freshness band; without one, the bare wire. Responses are
+  not truncated. The seq is lazy over an immutable db snapshot, so realize it
+  while `conn` is open."
+  [conn user tags half-life]
+  (let [db   (d/db conn)
+        band (band-for half-life)
+        f    (partial eids-by-tag db user)]
+    (query db user band #{} [] #{} (map (partial vector f) tags))))
 
 (defn- eids-by-ids [db user ids]
   (if (seq ids)
@@ -295,13 +333,14 @@
   or does not exist is skipped, because the match joins on the caller's user. A
   duplicate id collapses to one memory, the dedup the closure walk performs. An
   empty `ids` selects nothing. `ids` are uuid strings. Responses are not
-  truncated. The seq is lazy over an immutable db snapshot, so realize it while
-  `conn` is open."
-  [conn user ids]
+  truncated. Each wire memory carries its freshness band. The seq is lazy over
+  an immutable db snapshot, so realize it while `conn` is open."
+  [conn user ids half-life]
   (let [db    (d/db conn)
+        band  (band-for half-life)
         uuids (mapv #(UUID/fromString %) ids)
         f     (partial eids-by-ids db user)]
-    (query db user #{} [] #{} [[f uuids]])))
+    (query db user band #{} [] #{} [[f uuids]])))
 
 ;; ---------- list all ----------
 
@@ -312,13 +351,15 @@
        db user))
 
 (defn all-memories
-  "Return a lazy seq of every wire memory `user` owns, in no set order. The eids
-  come back up front as cheap longs. Each memory map is pulled lazily, so the full
-  set never sits in memory at once. Responses are not truncated. The seq is lazy
-  over an immutable db snapshot, so realize it while `conn` is open."
-  [conn user]
-  (let [db (d/db conn)]
-    (map (fn [eid] (->wire (d/pull db pull-pattern eid)))
+  "Return a lazy seq of every wire memory `user` owns, in no set order, each
+  carrying its freshness band. The eids come back up front as cheap longs. Each
+  memory map is pulled lazily, so the full set never sits in memory at once.
+  Responses are not truncated. The seq is lazy over an immutable db snapshot, so
+  realize it while `conn` is open."
+  [conn user half-life]
+  (let [db   (d/db conn)
+        band (band-for half-life)]
+    (map (fn [eid] (->wire band (d/pull db pull-pattern eid)))
          (all-eids db user))))
 
 ;; ---------- conformance ----------
@@ -328,23 +369,24 @@
   `reject?` takes a memory's tags (a vector of [category label] pairs, empty when
   the memory carries none) and returns a truthy value when the memory fails
   conformance. The caller injects the live configuration check, so this namespace
-  holds no configuration dependency. Lazy over the all-memories snapshot, so
-  realize it while `conn` is open."
-  [conn user reject?]
-  (filter #(reject? (:tags % [])) (all-memories conn user)))
+  holds no configuration dependency. Each wire memory carries its freshness band.
+  Lazy over the all-memories snapshot, so realize it while `conn` is open."
+  [conn user reject? half-life]
+  (filter #(reject? (:tags % [])) (all-memories conn user half-life)))
 
 (defn conforming-fraction
   "Return the fraction of the caller's memories that conform, as a raw double. A
   memory conforms when `reject?` returns a falsey value for its tags. The caller
   injects the conformance check, as with `nonconforming`. The value is 0.0 when
   the caller owns no memory. One reduce over the all-memories stream, the seam a
-  later freshness pass can extend."
-  [conn user reject?]
+  later freshness pass can extend. The `half-life` reaches `all-memories`, which
+  bands every wire memory; this reduce reads only the tags."
+  [conn user reject? half-life]
   (let [[total conforming]
         (reduce (fn [[t c] m]
                   [(inc t) (if (reject? (:tags m [])) c (inc c))])
                 [0 0]
-                (all-memories conn user))]
+                (all-memories conn user half-life))]
     (if (zero? total) 0.0 (/ conforming (double total)))))
 
 ;; ---------- search ----------

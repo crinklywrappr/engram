@@ -5,6 +5,7 @@
             [datalevin.core :as d]
             [engram.config :as config]
             [engram.errors :as errors]
+            [engram.freshness :as freshness]
             [engram.handler :as handler]
             [engram.memory :as memory]
             [engram.migrations :as migrations]
@@ -36,8 +37,8 @@
   recorded count builds its own writer and drains it."
   ([conn] (test-app conn cfg))
   ([conn c] (handler/app conn c
-                         (stat-writer/writer conn (stats/->TagRecallCount (:half-life-days c)))
-                         (stat-writer/writer conn (stats/->MemoryRecallCount (:half-life-days c))))))
+                         (stat-writer/writer conn (stats/->TagRecallCount (:recall-half-life-days c)))
+                         (stat-writer/writer conn (stats/->MemoryRecallCount (:recall-half-life-days c))))))
 
 (defn- mem-counts
   "The caller's per-memory recall counts, keyed by src. Only a memory that
@@ -57,6 +58,16 @@
 (defn- updated-at [conn id]
   (d/q '[:find ?u . :in $ ?id
          :where [?e :memory/id ?id] [?e :memory/updated-at ?u]]
+       (d/db conn) (java.util.UUID/fromString id)))
+
+(defn- created-at [conn id]
+  (d/q '[:find ?c . :in $ ?id
+         :where [?e :memory/id ?id] [?e :memory/created-at ?c]]
+       (d/db conn) (java.util.UUID/fromString id)))
+
+(defn- last-confirmed [conn id]
+  (d/q '[:find ?lc . :in $ ?id
+         :where [?e :memory/id ?id] [?e :memory/last-confirmed ?lc]]
        (d/db conn) (java.util.UUID/fromString id)))
 
 ;; ---------- tag and token validation ----------
@@ -82,20 +93,20 @@
   (testing "with ENGRAM_CONFIG unset, load-config reads default-path"
     (with-redefs-fn {#'config/getenv (constantly nil)}
       (fn []
-        (is (= 14 (:half-life-days
+        (is (= 14 (:recall-half-life-days
                    (config/load-config "deploy/engram-config.example.edn")))))))
   (testing "with ENGRAM_CONFIG set, load-config reads that path over default-path"
     (let [tmp (java.io.File/createTempFile "engram-cfg" ".edn")]
       (try
-        (spit tmp (pr-str {:half-life-days 99 :configurations [{"domain" "+"}]}))
+        (spit tmp (pr-str {:recall-half-life-days 99 :configurations [{"domain" "+"}]}))
         (with-redefs-fn {#'config/getenv (fn [k] (when (= k "ENGRAM_CONFIG") (.getPath tmp)))}
           (fn []
-            (is (= 99 (:half-life-days
+            (is (= 99 (:recall-half-life-days
                        (config/load-config "deploy/engram-config.example.edn"))))))
         (finally (.delete tmp))))))
 
 (deftest config-categories-validation
-  (let [base {:half-life-days 14
+  (let [base {:recall-half-life-days 14
               :configurations [{"domain" "+" "scope" "?"}]}]
     (testing "a config with no :categories is returned unchanged"
       (is (= base (config/validate-config base))))
@@ -156,7 +167,7 @@
       ;; bob owns a matching fact that alice must never see.
       (memory/create! conn "bob" {:content "bob secret" :src "z"
                                   :tags [["domain" "clojure"]]})
-      (let [rows (memory/recall-by-tags conn "alice" [["domain" "clojure"]])
+      (let [rows (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)
             srcs (set (map :src rows))]
         (testing "the pair match is returned"
           (is (contains? srcs "a")))
@@ -173,7 +184,7 @@
       (try
         (memory/create! conn "alice" {:content "c1" :src "c1" :tags [["domain" "clojure"]] :related ["c2"]})
         (memory/create! conn "alice" {:content "c2" :src "c2" :tags [["misc" "m"]] :related ["c1"]})
-        (is (= #{"c1" "c2"} (set (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+        (is (= #{"c1" "c2"} (set (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
         (finally (d/close conn)))))
   (testing "a diamond returns the shared child once"
     (let [conn (fresh-conn)]
@@ -181,7 +192,7 @@
         (memory/create! conn "alice" {:content "m1" :src "m1" :tags [["domain" "clojure"]] :related ["x"]})
         (memory/create! conn "alice" {:content "m2" :src "m2" :tags [["domain" "clojure"]] :related ["x"]})
         (memory/create! conn "alice" {:content "x" :src "x" :tags [["misc" "m"]]})
-        (let [srcs (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))]
+        (let [srcs (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))]
           (is (= #{"m1" "m2" "x"} (set srcs)))
           (is (== 1 (count (filter #{"x"} srcs)))))
         (finally (d/close conn)))))
@@ -189,13 +200,13 @@
     (let [conn (fresh-conn)]
       (try
         (memory/create! conn "alice" {:content "s" :src "s" :tags [["domain" "clojure"]] :related ["s"]})
-        (is (= ["s"] (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))))
+        (is (= ["s"] (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))))
         (finally (d/close conn)))))
   (testing "a related pointing at a nonexistent src yields nothing extra"
     (let [conn (fresh-conn)]
       (try
         (memory/create! conn "alice" {:content "g" :src "g" :tags [["domain" "clojure"]] :related ["ghost"]})
-        (is (= #{"g"} (set (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+        (is (= #{"g"} (set (map :src (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
         (finally (d/close conn))))))
 
 (deftest recall-by-ids-selects-and-follows-closure
@@ -208,21 +219,21 @@
             c (memory/create! conn "alice" {:content "fact c" :src "c" :tags [["domain" "clojure"]]})
             z (memory/create! conn "bob"   {:content "bob secret" :src "z" :tags [["domain" "clojure"]]})]
         (testing "a selected id returns, and its related closure is pulled in"
-          (is (= #{"a" "b"} (set (map :src (memory/recall-by-ids conn "alice" [a]))))))
+          (is (= #{"a" "b"} (set (map :src (memory/recall-by-ids conn "alice" [a] 30))))))
         (testing "a foreign id is skipped silently"
-          (is (empty? (memory/recall-by-ids conn "alice" [z]))))
+          (is (empty? (memory/recall-by-ids conn "alice" [z] 30))))
         (testing "a missing id is skipped silently"
-          (is (empty? (memory/recall-by-ids conn "alice" [(str (java.util.UUID/randomUUID))]))))
+          (is (empty? (memory/recall-by-ids conn "alice" [(str (java.util.UUID/randomUUID))] 30))))
         (testing "a duplicate id collapses to one memory"
-          (is (= ["c"] (map :src (memory/recall-by-ids conn "alice" [c c])))))
+          (is (= ["c"] (map :src (memory/recall-by-ids conn "alice" [c c] 30)))))
         (testing "an empty id list selects nothing"
-          (is (empty? (memory/recall-by-ids conn "alice" []))))
+          (is (empty? (memory/recall-by-ids conn "alice" [] 30))))
         (testing "each row carries the recall wire shape, no score"
-          (let [m (first (filter #(= "a" (:src %)) (memory/recall-by-ids conn "alice" [a])))]
-            (is (= #{:id :content :src :tags :related} (set (keys m))))))
+          (let [m (first (filter #(= "a" (:src %)) (memory/recall-by-ids conn "alice" [a] 30)))]
+            (is (= #{:id :content :src :tags :related :freshness} (set (keys m))))))
         (testing "a mix of own, foreign, and missing returns only the owned closure"
           (let [srcs (set (map :src (memory/recall-by-ids conn "alice"
-                                                          [a z (str (java.util.UUID/randomUUID))])))]
+                                                          [a z (str (java.util.UUID/randomUUID))] 30)))]
             (is (= #{"a" "b"} srcs)))))
       (finally (d/close conn)))))
 
@@ -234,7 +245,7 @@
       (memory/create! conn "alice" {:content "a1" :src "a" :tags [["domain" "clojure"]] :related ["b"]})
       (memory/create! conn "alice" {:content "a2" :src "b" :tags [["tech" "datalevin"]]})
       (memory/create! conn "bob"   {:content "b1" :src "z" :tags [["domain" "clojure"]]})
-      (let [rows (memory/all-memories conn "alice")
+      (let [rows (memory/all-memories conn "alice" 30)
             srcs (set (map :src rows))]
         (testing "the function returns a lazy sequence"
           (is (instance? clojure.lang.LazySeq rows)))
@@ -244,7 +255,7 @@
           (is (not (contains? srcs "z"))))
         (testing "each row carries the recall wire shape"
           (let [m (first (filter #(= "a" (:src %)) rows))]
-            (is (= #{:id :content :src :tags :related} (set (keys m)))))))
+            (is (= #{:id :content :src :tags :related :freshness} (set (keys m)))))))
       (finally (d/close conn)))))
 
 (deftest nonconforming-returns-only-failing-memories
@@ -255,7 +266,7 @@
       (memory/create! conn "alice" {:content "bad-tag" :src "bad" :tags [["tech" "datalevin"]]})
       (memory/create! conn "alice" {:content "no-tags" :src "none"})
       (memory/create! conn "bob"   {:content "bob-bad" :src "zz" :tags [["tech" "datalevin"]]})
-      (let [rows (memory/nonconforming conn "alice" reject?)
+      (let [rows (memory/nonconforming conn "alice" reject? 30)
             srcs (set (map :src rows))]
         (testing "the function returns a lazy sequence"
           (is (instance? clojure.lang.LazySeq rows)))
@@ -279,9 +290,9 @@
       (memory/create! conn "alice" {:content "bad" :src "bad" :tags [["tech" "datalevin"]]})  ; no domain
       (memory/create! conn "bob"   {:content "zz" :src "zz" :tags [["tech" "datalevin"]]})      ; other user
       (testing "the fraction is conforming over total, for the caller only"
-        (is (== 0.75 (memory/conforming-fraction conn "alice" reject?))))   ; 3 of 4 conform
+        (is (== 0.75 (memory/conforming-fraction conn "alice" reject? 30))))   ; 3 of 4 conform
       (testing "a user with no memories gets 0.0"
-        (is (== 0.0 (memory/conforming-fraction conn "nobody" reject?))))
+        (is (== 0.0 (memory/conforming-fraction conn "nobody" reject? 30))))
       (finally (d/close conn)))))
 
 (deftest fetch-returns-owned-memory
@@ -290,16 +301,16 @@
       (let [id (memory/create! conn "alice" {:content "x" :src "s"
                                              :tags [["domain" "clojure"]] :related ["r"]})]
         (testing "the owner gets the wire memory by id"
-          (let [m (memory/fetch conn "alice" id)]
+          (let [m (memory/fetch conn "alice" id 30)]
             (is (= id (:id m)))
             (is (= "x" (:content m)))
             (is (= "s" (:src m)))
             (is (= [["domain" "clojure"]] (:tags m)))
             (is (= ["r"] (:related m)))))
         (testing "another user gets nil"
-          (is (nil? (memory/fetch conn "bob" id))))
+          (is (nil? (memory/fetch conn "bob" id 30))))
         (testing "a missing id gets nil"
-          (is (nil? (memory/fetch conn "alice" (str (java.util.UUID/randomUUID)))))))
+          (is (nil? (memory/fetch conn "alice" (str (java.util.UUID/randomUUID)) 30)))))
       (finally (d/close conn)))))
 
 (deftest search-ranks-content-and-src
@@ -397,10 +408,10 @@
       (let [id (memory/create! conn "alice" {:content "temp" :src "s"
                                              :tags [["domain" "clojure"]]})]
         (testing "the memory is present before the delete"
-          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
         (testing "delete removes it and returns the id"
           (is (= id (memory/delete! conn "alice" id)))
-          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
       (finally (d/close conn)))))
 
 (deftest delete-missing-and-isolation
@@ -412,7 +423,7 @@
                                              :tags [["domain" "clojure"]]})]
         (testing "another user cannot delete it, and it survives"
           (is (nil? (memory/delete! conn "bob" id)))
-          (is (= 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))))))
+          (is (= 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))))))
       (finally (d/close conn)))))
 
 ;; ---------- memory: batch apply ----------
@@ -444,7 +455,7 @@
           (is (== 1 (count (:ids res))))
           (is (== 3 (:applied res))))
         (let [by-src (into {} (map (juxt :src identity)
-                                   (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))]
+                                   (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))]
           (testing "the create landed and the update changed content in place"
             (is (contains? by-src "a"))
             (is (= "new-x" (:content (by-src "x")))))
@@ -465,7 +476,7 @@
           (is (= [{:op "create" :i 1}] (map #(select-keys % [:op :i]) (:errors res))))
           (is (= errors/no-configuration (:code (first (:errors res))))))
         (testing "nothing was written, not even the valid create"
-          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
       (finally (d/close conn)))))
 
 (deftest batch-missing-id-and-isolation
@@ -486,7 +497,7 @@
           (let [res (memory/apply-batch! conn "bob" {:delete [x]} create-tag-err update-tag-err)]
             (is (false? (:ok? res)))
             (is (= errors/not-found (:code (first (:errors res))))))
-          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))))))
+          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))))))
       (finally (d/close conn)))))
 
 (deftest batch-cumulative-update
@@ -500,7 +511,7 @@
         (testing "several updates to one id fold cumulatively per field, writing one memory"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
-          (let [m (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))]
+          (let [m (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))]
             (is (= "c2" (:content m)))
             (is (= ["y"] (:related m))))))
       (finally (d/close conn)))))
@@ -518,7 +529,7 @@
           (is (= #{{:op "update" :i 0} {:op "delete" :i 0}}
                  (set (map #(select-keys % [:op :i]) (:errors res)))))
           (is (= #{errors/conflict} (set (map :code (:errors res)))))
-          (is (= "orig" (:content (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))))
+          (is (= "orig" (:content (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))))
       (finally (d/close conn)))))
 
 (deftest batch-duplicate-delete-tolerated
@@ -529,7 +540,7 @@
         (testing "a repeated delete id is deduplicated, deletes once, no error"
           (is (true? (:ok? res)))
           (is (== 1 (:applied res)))
-          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
+          (is (empty? (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
       (finally (d/close conn)))))
 
 (deftest plan-batch-is-pure
@@ -547,8 +558,8 @@
           (is (seq (:tx-data plan)))
           (is (== 2 (:applied plan))))
         (testing "the planner writes nothing: the seed memory is unchanged and alone"
-          (is (= "orig" (:content (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]])))))
-          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]]))))))
+          (is (= "orig" (:content (first (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30)))))
+          (is (== 1 (count (memory/recall-by-tags conn "alice" [["domain" "clojure"]] 30))))))
       (finally (d/close conn)))))
 
 (deftest plan-batch-reports-errors-without-tx-data
@@ -1092,9 +1103,9 @@
           (is (== 200 (:status resp)))
           (is (vector? (:tags body)))
           (is (vector? (:memories body))))
-        (testing "each memory carries the wire keys, and an empty related is omitted"
+        (testing "each memory carries the wire keys plus the freshness band, and an empty related is omitted"
           (let [m (first (:memories body))]
-            (is (= #{:id :content :src :tags}
+            (is (= #{:id :content :src :tags :freshness}
                    (set (keys m))))
             (is (not (contains? m :related))))))
       (testing "the old pairs body key no longer matches, so it is a 400"
@@ -1205,8 +1216,8 @@
                                                                   :body {:tags [["domain" "clojure"]]}})
             mem    (first (:memories (body-json resp)))]
         (stat-writer/drain! mw)
-        (testing "the recall wire carries no recall-count keys"
-          (is (= #{:id :content :src :tags} (set (keys mem)))))
+        (testing "the recall wire carries the freshness band but no recall-count keys"
+          (is (= #{:id :content :src :tags :freshness} (set (keys mem)))))
         (testing "the memory was counted"
           (is (== 1 (get-in (mem-counts conn "alice") ["s" :lifetime]))))
         (testing "the count write did not bump updated-at"
@@ -1292,7 +1303,7 @@
       (finally (d/close conn)))))
 
 (deftest handler-config-carries-value-set
-  (let [raw  {:half-life-days 14
+  (let [raw  {:recall-half-life-days 14
               :configurations [{"scope" {:cardinality "?" :one-of ["global" "project"]} "domain" "+"}]}
         c    (assoc raw :tag-schema (config/compile-tag-schema raw))
         conn (fresh-conn)
@@ -1332,3 +1343,161 @@
           (is (= "ok" (:status body)))
           (is (= "dev" (:version body)))))
       (finally (d/close conn)))))
+
+;; ---------- freshness and confirm (ticket 14) ----------
+
+(def ^:private day-ms 86400000)
+
+(deftest freshness-kernel-value-and-band
+  (testing "the value is 1.0 at age zero and halves at each half-life"
+    (is (== 1.0 (freshness/value 30 0)))
+    (is (== 0.5 (freshness/value 30 (* 30 day-ms)))))
+  (testing "the band follows the half-life split, exact at the boundaries"
+    (is (= "fresh" (freshness/band 30 0)))
+    (is (= "fresh" (freshness/band 30 (* 29 day-ms))))
+    (is (= "aging" (freshness/band 30 (* 30 day-ms))))     ; one half-life -> aging
+    (is (= "aging" (freshness/band 30 (* 59 day-ms))))
+    (is (= "stale" (freshness/band 30 (* 60 day-ms))))     ; two half-lives -> stale
+    (is (= "stale" (freshness/band 30 (* 120 day-ms))))))
+
+(deftest last-confirmed-schema-and-stamping
+  (let [conn (fresh-conn)]
+    (try
+      (testing "migration 004 added the last-confirmed instant attribute"
+        (is (= :db.type/instant (get-in (d/schema conn) [:memory/last-confirmed :db/valueType]))))
+      (let [id (memory/create! conn "alice" {:content "x" :src "s" :tags [["domain" "clojure"]]})]
+        (testing "a create stamps last-confirmed equal to created-at and updated-at"
+          (is (= (created-at conn id) (updated-at conn id) (last-confirmed conn id))))
+        (Thread/sleep 5)
+        (memory/update! conn "alice" id {:content "y"})
+        (testing "an update moves updated-at and last-confirmed to a later instant together"
+          (is (= (updated-at conn id) (last-confirmed conn id)))
+          (is (.after ^java.util.Date (last-confirmed conn id) (created-at conn id))))
+        (testing "the invariant created-at <= updated-at <= last-confirmed holds"
+          (is (not (.after ^java.util.Date (created-at conn id) (updated-at conn id))))
+          (is (not (.after ^java.util.Date (updated-at conn id) (last-confirmed conn id))))))
+      (finally (d/close conn)))))
+
+(deftest confirm-stamps-owned-only
+  (let [conn (fresh-conn)]
+    (try
+      (let [a (memory/create! conn "alice" {:content "a" :src "a" :tags [["domain" "clojure"]]})
+            b (memory/create! conn "alice" {:content "b" :src "b" :tags [["domain" "clojure"]]})
+            z (memory/create! conn "bob"   {:content "z" :src "z" :tags [["domain" "clojure"]]})
+            a-upd0 (updated-at conn a)
+            a-lc0  (last-confirmed conn a)
+            z-lc0  (last-confirmed conn z)]
+        (Thread/sleep 5)
+        (testing "confirm stamps the owned ids, drops a foreign and a missing id, collapses a repeat"
+          (is (== 2 (memory/confirm! conn "alice"
+                                     [a a b z (str (java.util.UUID/randomUUID))]))))
+        (testing "a confirmed memory's last-confirmed moved forward"
+          (is (.after ^java.util.Date (last-confirmed conn a) a-lc0)))
+        (testing "confirm did not touch updated-at"
+          (is (= a-upd0 (updated-at conn a))))
+        (testing "a foreign memory was never stamped"
+          (is (= z-lc0 (last-confirmed conn z))))
+        (testing "a confirm of only foreign or missing ids stamps nothing"
+          (is (== 0 (memory/confirm! conn "alice"
+                                     [z (str (java.util.UUID/randomUUID))])))))
+      (finally (d/close conn)))))
+
+(deftest freshness-on-recall-wire-and-confirm-route
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [id (:id (body-json (request app :post "/memories"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})))]
+        (testing "a just-created memory recalls with a fresh band"
+          (let [m (first (:memories (body-json (request app :post "/memories/recall/by-tags"
+                                                         {:user "alice" :accept "application/json"
+                                                          :body {:tags [["domain" "clojure"]]}}))))]
+            (is (= "fresh" (:freshness m)))))
+        (testing "the confirm route stamps the owned id and returns the count"
+          (let [body (body-json (request app :post "/memories/confirm"
+                                         {:user "alice" :accept "application/json"
+                                          :body {:ids [id]}}))]
+            (is (== 1 (:confirmed body)))))
+        (testing "a foreign caller confirms nothing"
+          (let [body (body-json (request app :post "/memories/confirm"
+                                         {:user "bob" :accept "application/json"
+                                          :body {:ids [id]}}))]
+            (is (== 0 (:confirmed body)))))
+        (testing "a non-uuid confirm id is a 400 at coercion"
+          (is (== 400 (:status (request app :post "/memories/confirm"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:ids ["not-a-uuid"]}})))))
+        (testing "a confirm without the user header is rejected"
+          (is (== 401 (:status (request app :post "/memories/confirm"
+                                        {:accept "application/json" :body {:ids [id]}}))))))
+      (finally (d/close conn)))))
+
+(deftest freshness-band-reflects-age-on-the-wire
+  (let [conn (fresh-conn)
+        c    (assoc cfg :freshness-half-life-days 10)
+        app  (test-app conn c)]
+    (try
+      (let [id (:id (body-json (request app :post "/memories"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})))]
+        ;; push last-confirmed 25 days back: 2.5 half-lives against a 10-day half-life -> stale
+        (d/transact! conn [{:memory/id (java.util.UUID/fromString id)
+                            :memory/last-confirmed (java.util.Date. (- (System/currentTimeMillis)
+                                                                       (* 25 day-ms)))}])
+        (testing "an old memory bands as stale, and fetch omits the raw timestamps"
+          (let [m (body-json (request app :get (str "/memories/" id)
+                                      {:user "alice" :accept "application/json"}))]
+            (is (= "stale" (:freshness m)))
+            (is (not (contains? m :last-confirmed)))
+            (is (not (contains? m :updated-at)))
+            (is (not (contains? m :created-at))))))
+      (finally (d/close conn)))))
+
+(deftest freshness-falls-back-to-updated-at
+  (let [conn (fresh-conn)
+        c    (assoc cfg :freshness-half-life-days 10)
+        app  (test-app conn c)
+        id   (java.util.UUID/randomUUID)
+        old  (java.util.Date. (- (System/currentTimeMillis) (* 25 day-ms)))]
+    (try
+      ;; a memory that predates the field: updated-at 25 days old, no last-confirmed
+      (d/transact! conn [{:memory/id id :memory/user "alice" :memory/content "x" :memory/src "s"
+                          :memory/created-at old :memory/updated-at old
+                          :memory/tag [{:tag/category "domain" :tag/label "clojure"}]}])
+      (testing "with no last-confirmed, freshness falls back to updated-at, so 25 days is stale at a 10-day half-life"
+        (let [m (body-json (request app :get (str "/memories/" (str id))
+                                    {:user "alice" :accept "application/json"}))]
+          (is (= "stale" (:freshness m)))))
+      (finally (d/close conn)))))
+
+(deftest half-life-defaults-and-validation
+  (testing "load-config merges the half-life defaults when the file names neither"
+    (let [tmp (java.io.File/createTempFile "engram-cfg" ".edn")]
+      (try
+        (spit tmp (pr-str {:configurations [{"domain" "+"}]}))
+        (with-redefs-fn {#'config/getenv (fn [k] (when (= k "ENGRAM_CONFIG") (.getPath tmp)))}
+          (fn []
+            (let [c (config/load-config "deploy/engram-config.example.edn")]
+              (is (== 14 (:recall-half-life-days c)))
+              (is (== 30 (:freshness-half-life-days c))))))
+        (finally (.delete tmp)))))
+  (testing "a named half-life overrides its default"
+    (let [tmp (java.io.File/createTempFile "engram-cfg" ".edn")]
+      (try
+        (spit tmp (pr-str {:recall-half-life-days 7 :freshness-half-life-days 90
+                           :configurations [{"domain" "+"}]}))
+        (with-redefs-fn {#'config/getenv (fn [k] (when (= k "ENGRAM_CONFIG") (.getPath tmp)))}
+          (fn []
+            (let [c (config/load-config "deploy/engram-config.example.edn")]
+              (is (== 7 (:recall-half-life-days c)))
+              (is (== 90 (:freshness-half-life-days c))))))
+        (finally (.delete tmp)))))
+  (testing "a non-positive half-life is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:recall-half-life-days 0 :configurations [{"domain" "+"}]})))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:freshness-half-life-days -1 :configurations [{"domain" "+"}]}))))
+  (testing "a non-number half-life is rejected"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (config/validate-config {:recall-half-life-days "x" :configurations [{"domain" "+"}]})))))

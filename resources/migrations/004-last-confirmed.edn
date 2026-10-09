@@ -1,0 +1,7 @@
+;; Per-memory last-confirmed stamp. An instant held on the memory entity and
+;; upserted by :memory/id. A create sets it to the create instant, an update to
+;; the update instant, and a confirm to now. The freshness band on the recall
+;; wire is derived from it. Additive, so :down is auto-derived. No attribute
+;; gains full-text, so the boot drift check sees no change and triggers no
+;; re-index.
+{:up {:schema/create {:memory/last-confirmed {:db/valueType :db.type/instant}}}}

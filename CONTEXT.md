@@ -89,6 +89,12 @@ recall by pairs does not surface. The client chooses from the candidates and
 passes their ids to a later recall.
 _Avoid_: query, grep, find
 
+**Confirm**:
+To affirm that a memory still holds, which stamps its last confirmation to now
+and leaves its content unchanged. An edit also confirms the fact. The confirm
+route stamps a batch of the caller's memories at once.
+_Avoid_: touch, refresh, renew
+
 **Recall count**:
 How often a tag or a memory was recalled. engram keeps it as a lifetime total
 and a recent decay measure. Only a recall under `/memories/recall/*` increments
@@ -107,6 +113,19 @@ _Avoid_: total, hits
 The exponential-decay measure of how often a tag or a memory was recalled
 lately, kept beside the lifetime count.
 _Avoid_: score, frequency, weight
+
+**Freshness**:
+How current a memory is, measured from its last confirmation. It is a decay
+value from 1.0 downward, halved at each freshness half-life. A memory confirmed
+just now is fully fresh. A memory long unconfirmed fades toward 0.
+_Avoid_: age, recency
+
+**Freshness band**:
+The coarse bucket a memory's freshness falls in: fresh, aging, or stale. A fresh
+memory sits under one freshness half-life since its last confirmation. An aging
+memory sits from one up to two. A stale memory sits at two or beyond. A recall
+carries the band, not the raw freshness value.
+_Avoid_: status, tier, bucket
 
 **Batch**:
 A grouped map of operations a client applies in one atomic call. It has a create,

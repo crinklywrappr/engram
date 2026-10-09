@@ -61,10 +61,10 @@
 
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
-(defn- recall-by-tags-handler [conn tag-writer mem-writer req]
+(defn- recall-by-tags-handler [conn cfg tag-writer mem-writer req]
   (let [user   (:engram/user req)
         tags   (get-in req [:parameters :body :tags])
-        mems   (memory/recall-by-tags conn user tags)
+        mems   (memory/recall-by-tags conn user tags (:freshness-half-life-days cfg))
         record (fn [ids] (stat-writer/record-memories! mem-writer user ids))]
     (stat-writer/record-pairs! tag-writer user tags)
     (if (wants-ndjson? req)
@@ -73,10 +73,10 @@
         (record (mapv :id v))
         {:status 200 :body {:tags tags :memories v}}))))
 
-(defn- recall-by-ids-handler [conn mem-writer req]
+(defn- recall-by-ids-handler [conn cfg mem-writer req]
   (let [user   (:engram/user req)
         ids    (get-in req [:parameters :body :ids])
-        mems   (memory/recall-by-ids conn user ids)
+        mems   (memory/recall-by-ids conn user ids (:freshness-half-life-days cfg))
         record (fn [rids] (stat-writer/record-memories! mem-writer user rids))]
     (if (wants-ndjson? req)
       (ndjson-response {:header true :ids ids} mems record)
@@ -84,9 +84,10 @@
         (record (mapv :id v))
         {:status 200 :body {:ids ids :memories v}}))))
 
-(defn- memories-handler [conn req]
+(defn- memories-handler [conn cfg req]
   (let [user (:engram/user req)]
-    (ndjson-response {:header true} (memory/all-memories conn user))))
+    (ndjson-response {:header true}
+                     (memory/all-memories conn user (:freshness-half-life-days cfg)))))
 
 (defn- tag-reject
   "The conformance reject predicate for `cfg`: nil when a tag set conforms, an
@@ -96,7 +97,9 @@
 
 (defn- nonconforming-handler [conn cfg req]
   (let [user (:engram/user req)]
-    (ndjson-response {:header true} (memory/nonconforming conn user (tag-reject cfg)))))
+    (ndjson-response {:header true}
+                     (memory/nonconforming conn user (tag-reject cfg)
+                                           (:freshness-half-life-days cfg)))))
 
 (defn- recall-row
   "The positional recall-count row the wire carries: category, label, count,
@@ -113,7 +116,7 @@
 (defn- recalls-handler [conn cfg req]
   (let [user (:engram/user req)
         cats (parse-categories (get-in req [:parameters :query :categories]))
-        rows (cond->> (stats/catalog conn user (:half-life-days cfg))
+        rows (cond->> (stats/catalog conn user (:recall-half-life-days cfg))
                cats (filter (comp cats :category)))]
     {:status 200 :body {:recalls (mapv recall-row rows)}}))
 
@@ -126,7 +129,8 @@
   (let [user (:engram/user req)]
     {:status 200
      :body {:stats {:link-density       (stats/link-density conn user)
-                    :conforming-fraction (trunc4 (memory/conforming-fraction conn user (tag-reject cfg)))}}}))
+                    :conforming-fraction (trunc4 (memory/conforming-fraction conn user (tag-reject cfg)
+                                                                              (:freshness-half-life-days cfg)))}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations
@@ -172,12 +176,17 @@
             rows (mapv (partial project-tags cats) (memory/search conn user search lim))]
         {:status 200 :body {:results rows}}))))
 
-(defn- fetch-handler [conn req]
+(defn- fetch-handler [conn cfg req]
   (let [user (:engram/user req)
         id   (get-in req [:parameters :path :id])]
-    (if-let [m (memory/fetch conn user id)]
+    (if-let [m (memory/fetch conn user id (:freshness-half-life-days cfg))]
       {:status 200 :body m}
       {:status 404 :body {:error "not found"}})))
+
+(defn- confirm-handler [conn req]
+  (let [user (:engram/user req)
+        ids  (get-in req [:parameters :body :ids])]
+    {:status 200 :body {:confirmed (memory/confirm! conn user ids)}}))
 
 (defn- delete-handler [conn req]
   (let [user (:engram/user req)
@@ -230,7 +239,7 @@
                        :responses  {200 {:body schema/RecallsOut}}
                        :handler (fn [req] (recalls-handler conn cfg req))}}]
     ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall/by-tags).
-    ["/memories"       {:get  {:handler (fn [req] (memories-handler conn req))}
+    ["/memories"       {:get  {:handler (fn [req] (memories-handler conn cfg req))}
                         :post {:parameters {:body schema/CreateBody}
                                :responses  {201 {:body schema/IdOut} 409 {:body schema/Conflict}}
                                :handler (fn [req] (create-handler conn cfg req))}}]
@@ -241,9 +250,14 @@
     ;; ids (by-ids). No :responses: the NDJSON stream cannot be response-coerced
     ;; (see schema/RecallOut). Both are static paths, resolving ahead of /memories/:id.
     ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByTagsBody}
-                                        :handler (fn [req] (recall-by-tags-handler conn tag-writer mem-writer req))}}]
+                                        :handler (fn [req] (recall-by-tags-handler conn cfg tag-writer mem-writer req))}}]
     ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
-                                       :handler (fn [req] (recall-by-ids-handler conn mem-writer req))}}]
+                                       :handler (fn [req] (recall-by-ids-handler conn cfg mem-writer req))}}]
+    ;; Restamp a batch of the caller's memories as confirmed. Static path, so it
+    ;; resolves ahead of /memories/:id.
+    ["/memories/confirm" {:post {:parameters {:body schema/ConfirmBody}
+                                 :responses  {200 {:body schema/ConfirmOut}}
+                                 :handler (fn [req] (confirm-handler conn req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
     ;; Static path, resolves ahead of /memories/:id. Bounded result, so it is response-coerced.
@@ -252,7 +266,7 @@
                                 :handler (fn [req] (search-handler conn req))}}]
     ["/memories/:id"   {:get    {:parameters {:path [:map [:id schema/IdStr]]}
                                  :responses  {200 {:body schema/MemoryOut} 404 {:body schema/ErrorOut}}
-                                 :handler (fn [req] (fetch-handler conn req))}
+                                 :handler (fn [req] (fetch-handler conn cfg req))}
                         :put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/UpdateBody}
                                  :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut} 409 {:body schema/Conflict}}
                                  :handler (fn [req] (update-handler conn cfg req))}

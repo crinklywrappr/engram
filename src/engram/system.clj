@@ -60,14 +60,14 @@
     (assoc c :tag-schema (config/compile-tag-schema c))))
 
 (defmethod ig/init-key :engram.stats/tag-writer [_ {:keys [conn config]}]
-  (stat-writer/writer conn (stats/->TagRecallCount (:half-life-days config))))
+  (stat-writer/writer conn (stats/->TagRecallCount (:recall-half-life-days config))))
 
 (defmethod ig/halt-key! :engram.stats/tag-writer [_ writer]
   ;; drain the pending recalls while the connection is still open
   (stat-writer/drain! writer))
 
 (defmethod ig/init-key :engram.stats/mem-writer [_ {:keys [conn config]}]
-  (stat-writer/writer conn (stats/->MemoryRecallCount (:half-life-days config))))
+  (stat-writer/writer conn (stats/->MemoryRecallCount (:recall-half-life-days config))))
 
 (defmethod ig/halt-key! :engram.stats/mem-writer [_ writer]
   ;; drain the pending recalls while the connection is still open

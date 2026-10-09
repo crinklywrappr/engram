@@ -46,6 +46,12 @@
 (def RecallByIdsBody
   [:map [:ids [:vector IdStr]]])
 
+;; /memories/confirm request. A batch of memory ids to restamp as confirmed.
+;; Each id is the IdStr form, so a non-uuid id is a 400 at coercion. An empty
+;; vector is well-formed and stamps nothing.
+(def ConfirmBody
+  [:map [:ids [:vector IdStr]]])
+
 (def UpdatePayload
   [:map
    [:id IdStr]
@@ -66,9 +72,12 @@
 
 ;; The recall wire shape. `->wire` omits an empty tags or related, so both are
 ;; optional here; response coercion keeps a present one and tolerates an absent one.
+;; `:freshness` is the derived band, always present on a route-served memory, one
+;; of fresh, aging, or stale.
 (def MemoryOut
   [:map
    [:id :string] [:content :string] [:src :string]
+   [:freshness [:enum "fresh" "aging" "stale"]]
    [:related {:optional true} [:vector :string]]
    [:tags {:optional true} [:vector [:tuple :string :string]]]])
 
@@ -123,6 +132,8 @@
 (def SearchOut [:map [:results [:vector SearchRow]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
+;; /memories/confirm echoes the number of the caller's memories it stamped.
+(def ConfirmOut [:map [:confirmed :int]])
 (def ErrorOut   [:map [:error :string]])
 ;; 409 keeps :configurations so the client can refresh; coercion strips undeclared
 ;; keys, so the schema must name every key the body carries.
