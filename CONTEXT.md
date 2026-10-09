@@ -127,6 +127,19 @@ memory sits from one up to two. A stale memory sits at two or beyond. A recall
 carries the band, not the raw freshness value.
 _Avoid_: status, tier, bucket
 
+**Staleness**:
+How overdue a memory is for confirmation, measured as one minus its freshness. A
+fresh memory has a staleness near 0. A long-unconfirmed memory has a staleness
+near 1.
+_Avoid_: age, decay
+
+**Confirm priority**:
+How much a stale memory deserves reconfirmation ahead of the others. It is the
+staleness times the recent recall count. A fact the user loads often but leaves
+unconfirmed ranks high. A stale fact the user never loads ranks at the bottom.
+The stale route orders by it.
+_Avoid_: score, rank, weight
+
 **Batch**:
 A grouped map of operations a client applies in one atomic call. It has a create,
 an update, and a delete group. All of the operations apply, or none do.

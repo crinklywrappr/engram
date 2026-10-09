@@ -14,22 +14,10 @@
   planner. The operational consumer, which owns the agent and the executors,
   lives in `engram.stats.writer`."
   (:require [datalevin.core :as d]
-            [engram.freshness :as freshness])
+            [engram.decay :as decay]
+            [engram.freshness :as freshness]
+            [engram.memory :as memory])
   (:import [java.util Date UUID]))
-
-(defn- decay-factor
-  "The fraction of a decayed weight that remains after `elapsed-ms`, given the
-  half-life in days. Shared by the read path (recalls) and the write path
-  (plan-recalls)."
-  [half-life-days elapsed-ms]
-  (Math/pow 0.5 (/ (/ (double elapsed-ms) 86400000.0) (double half-life-days))))
-
-(defn- project-decayed
-  "Project a stored decayed weight to `clock`: the weight scaled by the decay
-  since its `last` recall, a stored last-request Date. The read and write paths
-  share this kernel; each caller keeps its own guard for a missing `last`."
-  [half-life-days decayed ^Date last clock]
-  (* (double decayed) (decay-factor half-life-days (- clock (.getTime last)))))
 
 (defn- stat-rows
   "The caller's raw stat rows [category label lifetime decayed last-request], one
@@ -53,7 +41,7 @@
   (let [now-ms (System/currentTimeMillis)]
     (map (fn [[c l life decayed ^Date last]]
            {:category c :label l :lifetime life
-            :recent (project-decayed half-life-days decayed last now-ms)})
+            :recent (decay/project half-life-days decayed last now-ms)})
          (stat-rows (d/db conn) user))))
 
 (defn- pair-rows
@@ -107,7 +95,7 @@
             {:category c :label l :count n
              :lifetime (long life)
              :recent   (if (instance? Date last)
-                         (project-decayed half-life-days decayed last now-ms)
+                         (decay/project half-life-days decayed last now-ms)
                          0.0)})
           (pair-rows (d/db conn) user))))
 
@@ -132,7 +120,7 @@
   (mapv (fn [[[c l] n]]
           (let [[life decayed ^Date last] (extant-recalls db user c l)
                 base (if last
-                       (project-decayed half-life-days decayed last flush-ms)
+                       (decay/project half-life-days decayed last flush-ms)
                        0.0)]
             {:stat/user user :stat/category c :stat/label l
              :stat/lifetime (+ (long (or life 0)) (long n))
@@ -172,7 +160,7 @@
   (mapv (fn [[id n]]
           (let [uuid (UUID/fromString id)
                 [life decayed ^Date last] (extant-memory-recall db uuid)
-                base (if last (project-decayed half-life-days decayed last flush-ms) 0.0)]
+                base (if last (decay/project half-life-days decayed last flush-ms) 0.0)]
             {:memory/id              uuid
              :memory/recall-lifetime (+ (long (or life 0)) (long n))
              :memory/recall-decayed  (+ base (double n))
@@ -228,15 +216,6 @@
          :where [?e :memory/user ?u]]
        db user))
 
-(defn- recent-count
-  "The memory's recent recall count projected to `now`: the stored decayed weight
-  decayed by the recall half-life since its last recall, or 0.0 when the memory
-  was never recalled."
-  [recall-half-life-days m ^long now]
-  (if-let [^Date last (:memory/last-recalled m)]
-    (project-decayed recall-half-life-days (:memory/recall-decayed m) last now)
-    0.0))
-
 (defn aggregate-memories
   "Pure. Reduce the caller's pulled memory `rows` into the /stats whole-store
   aggregates, in one pass. `reject?` is the conformance predicate: it takes a
@@ -262,11 +241,10 @@
         (reduce
          (fn [a m]
            (let [tags    (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m))
-                 ^Date t (or (:memory/last-confirmed m) (:memory/updated-at m) (:memory/created-at m))
-                 age     (- now (.getTime t))
+                 age     (memory/age-ms m now)
                  fv      (freshness/value freshness-half-life-days age)
                  stale?  (freshness/stale? freshness-half-life-days age)
-                 recent  (recent-count recall-half-life-days m now)
+                 recent  (memory/recent-count recall-half-life-days m now)
                  hot?    (>= recent hot-threshold)]
              (cond-> (-> a
                          (update :total inc)

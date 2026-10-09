@@ -101,6 +101,13 @@
                      (memory/nonconforming conn user (tag-reject cfg)
                                            (:freshness-half-life-days cfg)))))
 
+(defn- stale-handler [conn cfg req]
+  (let [user (:engram/user req)]
+    (ndjson-response {:header true}
+                     (memory/stale conn user
+                                   (:freshness-half-life-days cfg)
+                                   (:recall-half-life-days cfg)))))
+
 (defn- recall-row
   "The positional recall-count row the wire carries: category, label, count,
   lifetime, recent."
@@ -265,6 +272,8 @@
                                  :handler (fn [req] (confirm-handler conn req))}}]
     ;; Static path, so it resolves ahead of /memories/:id. No :responses: NDJSON stream.
     ["/memories/nonconforming" {:get {:handler (fn [req] (nonconforming-handler conn cfg req))}}]
+    ;; Static path, resolves ahead of /memories/:id. No :responses: NDJSON stream.
+    ["/memories/stale" {:get {:handler (fn [req] (stale-handler conn cfg req))}}]
     ;; Static path, resolves ahead of /memories/:id. Bounded result, so it is response-coerced.
     ["/memories/search" {:post {:parameters {:body schema/SearchBody}
                                 :responses  {200 {:body schema/SearchOut} 400 {:body schema/ErrorOut}}

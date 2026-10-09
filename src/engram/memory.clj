@@ -8,6 +8,7 @@
   in linked memories the pairs did not name."
   (:require [datalevin.core :as d]
             [clojure.set :as st]
+            [engram.decay :as decay]
             [engram.errors :as errors]
             [engram.freshness :as freshness])
   (:import [java.util UUID Date]))
@@ -22,16 +23,22 @@
   [m]
   (mapv (fn [t] [(:tag/category t) (:tag/label t)]) (:memory/tag m)))
 
+(defn age-ms
+  "Milliseconds from a pulled memory's effective last-confirmed to `clock`. The
+  effective last-confirmed resolves through last-confirmed, then updated-at, then
+  created-at for a memory that predates the field. The one shared home, so the
+  wire band, the stats aggregates, and the stale route resolve age identically."
+  [m clock]
+  (- clock (.getTime ^Date (or (:memory/last-confirmed m)
+                               (:memory/updated-at m)
+                               (:memory/created-at m)))))
+
 (defn- band-for
   "A function from a pulled memory to its freshness band, at `half-life` days
-  against one clock captured now. The age runs from the memory's last-confirmed,
-  resolved through updated-at then created-at for a memory that predates the
-  field."
+  against one clock captured now."
   [half-life]
   (let [clock (System/currentTimeMillis)]
-    (fn [m]
-      (let [^Date t (or (:memory/last-confirmed m) (:memory/updated-at m) (:memory/created-at m))]
-        (freshness/band half-life (- clock (.getTime t)))))))
+    (fn [m] (freshness/band half-life (age-ms m clock)))))
 
 (defn- ->wire
   "Shape a pulled memory into the JSON wire form, with its freshness band. Omit
@@ -361,6 +368,64 @@
         band (band-for half-life)]
     (map (fn [eid] (->wire band (d/pull db pull-pattern eid)))
          (all-eids db user))))
+
+;; ---------- recall recency and the stale route ----------
+
+(defn recent-count
+  "A pulled memory's recent recall count projected to `now`: the stored decayed
+  weight decayed by the recall half-life since its last recall, or 0.0 when the
+  memory was never recalled. The stale route ranks by it, and the stats
+  aggregates read it for the use-weighted mean and the hot test."
+  [recall-half-life-days m now]
+  (if-let [^Date last (:memory/last-recalled m)]
+    (decay/project recall-half-life-days (:memory/recall-decayed m) last now)
+    0.0))
+
+(defn- priority-row
+  "The confirm-priority sort row for the pulled memory `m` at `now`, or nil when
+  `m` is not stale. The row is {:eid :src :id :priority}, where the priority is
+  the staleness (one minus freshness) times the recent recall count."
+  [freshness-half-life-days recall-half-life-days m now]
+  (let [age (age-ms m now)]
+    (when (freshness/stale? freshness-half-life-days age)
+      (let [staleness (- 1.0 (freshness/value freshness-half-life-days age))
+            recent    (recent-count recall-half-life-days m now)]
+        {:eid (:db/id m) :src (:memory/src m) :id (:memory/id m)
+         :priority (* staleness recent)}))))
+
+(defn- stale-candidate-rows
+  "Pull the cheap sort columns for the caller's memories that could be stale: the
+  eid, id, src, the freshness timestamps, and the recall columns. The created-at
+  pre-filter keeps only memories old enough to possibly be stale. It is a harmless
+  superset, because created-at is the floor of the effective last-confirmed, so no
+  stale memory is dropped."
+  [db user ^Date cutoff]
+  (d/q '[:find [(pull ?e [:db/id :memory/id :memory/src
+                          :memory/last-confirmed :memory/updated-at :memory/created-at
+                          :memory/recall-decayed :memory/last-recalled]) ...]
+         :in $ ?u ?cutoff
+         :where [?e :memory/user ?u]
+                [?e :memory/created-at ?c]
+                [(<= ?c ?cutoff)]]
+       db user cutoff))
+
+(defn stale
+  "Return the caller's stale memories as wire memories, ordered by confirm-priority
+  highest first. The confirm-priority is the staleness (one minus freshness) times
+  the recent recall count. A never-loaded stale memory scores zero and sorts last.
+  A tie breaks by src then id, so repeated calls return the same order. Phase one
+  reads only the cheap sort columns, pre-filtered by created-at. Phase two maps
+  each sorted row to its full wire memory, pulled lazily from the one snapshot.
+  The result is a lazy seq over that snapshot, so realize it while `conn` is open."
+  [conn user freshness-half-life-days recall-half-life-days]
+  (let [db     (d/db conn)
+        band   (band-for freshness-half-life-days)
+        now    (System/currentTimeMillis)
+        cutoff (Date. (- now (freshness/stale-age-ms freshness-half-life-days)))]
+    (->> (stale-candidate-rows db user cutoff)
+         (keep #(priority-row freshness-half-life-days recall-half-life-days % now))
+         (sort-by (juxt (comp - :priority) :src :id))
+         (map #(->wire band (d/pull db pull-pattern (:eid %)))))))
 
 ;; ---------- conformance ----------
 

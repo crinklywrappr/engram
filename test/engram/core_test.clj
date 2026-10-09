@@ -1578,3 +1578,87 @@
   (testing "a non-number half-life is rejected"
     (is (thrown? clojure.lang.ExceptionInfo
                  (config/validate-config {:recall-half-life-days "x" :configurations [{"domain" "+"}]})))))
+
+;; ---------- stale route (ticket 16) ----------
+
+(defn- seed-stale!
+  "Transact a memory `days-ago` old in all three timestamps, so it respects the
+  created <= updated <= last-confirmed invariant and passes the created-at
+  pre-filter. With `recall-decayed`, stamp a recent recall count at now; without,
+  leave it never recalled."
+  [conn user src days-ago recall-decayed]
+  (let [t (java.util.Date. (- (System/currentTimeMillis) (* days-ago 86400000)))]
+    (d/transact! conn [(cond-> {:memory/id (java.util.UUID/randomUUID)
+                                :memory/user user :memory/content src :memory/src src
+                                :memory/created-at t :memory/updated-at t :memory/last-confirmed t
+                                :memory/tag [{:tag/category "domain" :tag/label "clojure"}]}
+                         recall-decayed (assoc :memory/recall-decayed recall-decayed
+                                               :memory/last-recalled (java.util.Date.)))])))
+
+(deftest age-ms-resolves-effective-last-confirmed
+  (let [now 1000000000000
+        d   (fn [back] (java.util.Date. (- now back)))]
+    (testing "last-confirmed wins when present"
+      (is (== 1000 (memory/age-ms {:memory/last-confirmed (d 1000)
+                                   :memory/updated-at (d 5000)
+                                   :memory/created-at (d 9000)} now))))
+    (testing "updated-at is the fallback with no last-confirmed"
+      (is (== 5000 (memory/age-ms {:memory/updated-at (d 5000)
+                                   :memory/created-at (d 9000)} now))))
+    (testing "created-at is the final fallback"
+      (is (== 9000 (memory/age-ms {:memory/created-at (d 9000)} now))))))
+
+(deftest stale-orders-by-confirm-priority
+  (let [conn (fresh-conn)]
+    (try
+      ;; freshness half-life 30 (stale at 60 days or older), recall half-life 14.
+      (seed-stale! conn "alice" "used" 90 4.0)    ; stale, staleness .875, recent 4 -> ~3.5
+      (seed-stale! conn "alice" "old"  300 1.0)   ; very stale, staleness ~.999, recent 1 -> ~1.0
+      (seed-stale! conn "alice" "cold" 90 nil)    ; stale, never recalled -> priority 0
+      (seed-stale! conn "alice" "fresh" 10 5.0)   ; not stale (10 days) -> excluded
+      ;; created long ago but confirmed now: it passes the created-at pre-filter,
+      ;; yet its effective last-confirmed is now, so the stale test drops it.
+      (d/transact! conn [{:memory/id (java.util.UUID/randomUUID)
+                          :memory/user "alice" :memory/content "revived" :memory/src "revived"
+                          :memory/created-at (java.util.Date. (- (System/currentTimeMillis) (* 300 86400000)))
+                          :memory/updated-at (java.util.Date.)
+                          :memory/last-confirmed (java.util.Date.)
+                          :memory/recall-decayed 5.0 :memory/last-recalled (java.util.Date.)
+                          :memory/tag [{:tag/category "domain" :tag/label "clojure"}]}])
+      ;; bob owns a stale memory alice must never see.
+      (seed-stale! conn "bob" "secret" 90 2.0)
+      (let [srcs (map :src (memory/stale conn "alice" 30 14))]
+        (testing "the caller's stale memories come back ordered by confirm-priority"
+          (is (= ["used" "old" "cold"] srcs)))
+        (testing "a fresh memory is excluded"
+          (is (not (some #{"fresh"} (set srcs)))))
+        (testing "an old-created but recently-confirmed memory is dropped by the stale test"
+          (is (not (some #{"revived"} (set srcs)))))
+        (testing "another user's stale memory never appears"
+          (is (not (some #{"secret"} (set srcs))))))
+      (finally (d/close conn)))))
+
+(deftest handler-stale-route
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (seed-stale! conn "alice" "used" 90 4.0)
+      (seed-stale! conn "alice" "cold" 90 nil)
+      (seed-stale! conn "alice" "fresh" 10 5.0)
+      (seed-stale! conn "bob"   "secret" 90 2.0)
+      (let [resp  (request app :get "/memories/stale" {:user "alice" :accept "application/x-ndjson"})
+            lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+            mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))
+            srcs  (map :src mems)]
+        (testing "the response is an NDJSON stream with a header line"
+          (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"])))
+          (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper)))))
+        (testing "only the caller's stale memories appear, the used one before the cold one"
+          (is (= ["used" "cold"] srcs)))
+        (testing "every returned memory carries the stale freshness band"
+          (is (every? #(= "stale" (:freshness %)) mems)))
+        (testing "a fresh memory and another user's memory never appear"
+          (is (not (some #{"fresh" "secret"} (set srcs))))))
+      (testing "a request without the user header is rejected"
+        (is (== 401 (:status (request app :get "/memories/stale" {:accept "application/x-ndjson"})))))
+      (finally (d/close conn)))))

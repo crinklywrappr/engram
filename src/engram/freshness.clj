@@ -10,6 +10,9 @@
   The recall wire carries the band. Ticket 15 reads the value for its freshness
   aggregates, and ticket 16 reads one minus the value as staleness.")
 
+;; This half-life curve is the same shape as the recall-recency decay in
+;; `engram.decay`, but it is kept separate on purpose: confirmation freshness and
+;; recall recency are distinct senses that may diverge. Do not fold them into one.
 (def ^:private ms-per-day 86400000.0)
 
 (defn value
@@ -38,3 +41,10 @@
   asks about staleness, so the band spelling stays owned here."
   [half-life-days age-ms]
   (= "stale" (band half-life-days age-ms)))
+
+(defn stale-age-ms
+  "The age in milliseconds at which a memory enters the stale band: two freshness
+  half-lives, given the half-life in days. The stale route pre-filters candidates
+  by it, so the stale boundary lives here beside the band it comes from."
+  [half-life-days]
+  (long (* 2 (double half-life-days) ms-per-day)))
