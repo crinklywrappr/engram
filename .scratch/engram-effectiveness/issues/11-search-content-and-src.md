@@ -16,19 +16,19 @@ Proposed `CONTEXT.md` entry:
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `POST /memories/search` accepts `{search, limit?, categories?}` and rejects a blank or missing search with a 400.
-- [ ] A migration adds full-text to src and rebuilds the index via `re-index`.
-- [ ] The rebuild uses a hyphen-splitting analyzer, `:include-text? true`, and `:index-position? true`.
-- [ ] Existing src values become searchable, and the new conn replaces the old in the system.
-- [ ] One ranked query covers content and src, and results are ordered by relevance.
-- [ ] Each result carries id, src, content, and a raw-double score.
-- [ ] Tags appear only for the requested categories.
-- [ ] A request without categories returns no `tags` field.
-- [ ] `limit` defaults to 20 and clamps to 100.
-- [ ] Search follows no related links and returns long-term Memories only.
-- [ ] The response is a bounded JSON `{"results":[...]}`, response-coerced and documented in Swagger.
-- [ ] Another user's memories never appear in the response.
-- [ ] `CONTEXT.md` gains the `Search` term.
-- [ ] `engram-recall` documents the search form, the 100 cap, and search as the recovery path.
+- [x] `POST /memories/search` accepts `{search, limit?, categories?}` and rejects a blank or missing search with a 400.
+- [x] A migration adds full-text to src and rebuilds the index via `re-index`.
+- [x] The rebuild uses a hyphen-splitting analyzer, `:include-text? true`, and `:index-position? true`.
+- [x] Existing src values become searchable, and the new conn replaces the old in the system.
+- [x] One ranked query covers content and src, and results are ordered by relevance.
+- [x] Each result carries id, src, content, and a raw-double score.
+- [x] Tags appear only for the requested categories.
+- [x] A request without categories returns no `tags` field.
+- [x] `limit` defaults to 20 and clamps to 100.
+- [x] Search follows no related links and returns long-term Memories only.
+- [x] The response is a bounded JSON `{"results":[...]}`, response-coerced and documented in Swagger.
+- [x] Another user's memories never appear in the response.
+- [x] `CONTEXT.md` gains the `Search` term.
+- [x] `engram-recall` documents the search form, the 100 cap, and search as the recovery path.

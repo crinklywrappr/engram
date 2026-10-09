@@ -20,20 +20,20 @@ The protocol leaves room to grow. A later kind of counted read can add a third r
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Migration 003 adds `:memory/recall-lifetime`, `:memory/recall-decayed`, and `:memory/last-recalled`.
-- [ ] A recall by tags and a recall by ids each update the count for every returned memory, closure included.
-- [ ] A search does not update the count.
-- [ ] For each returned memory, the lifetime gains one and `last-recalled` moves to now.
-- [ ] The recent measure decays to now by the recall half-life, then gains one.
-- [ ] The update runs through an asynchronous memory writer, off the read path.
-- [ ] The `RecallCountWritable` protocol carries `->pending` and `->writes`, with `TagRecallCount` and `MemoryRecallCount` records.
-- [ ] The system wires `:engram.stats/tag-writer` and `:engram.stats/mem-writer` from the same `writer` function.
-- [ ] `record!` becomes `record-pairs!`, a new `record-memories!` records ids, and one `drain!` serves both.
-- [ ] The handler taps delivered ids through a transducer and records them once, never holding the full maps.
-- [ ] The count write never touches `:memory/updated-at`.
-- [ ] No response exposes the per-memory count.
-- [ ] An existing memory starts at a lifetime of 0, a recent of 0.0, and no `last-recalled`, with no backfill.
-- [ ] The glossary extends recall count, lifetime count, and recent count to a memory, and records that only `/memories/recall/*` increments.
-- [ ] The tests query the database directly to verify the stored count.
+- [x] Migration 003 adds `:memory/recall-lifetime`, `:memory/recall-decayed`, and `:memory/last-recalled`.
+- [x] A recall by tags and a recall by ids each update the count for every returned memory, closure included.
+- [x] A search does not update the count.
+- [x] For each returned memory, the lifetime gains one and `last-recalled` moves to now.
+- [x] The recent measure decays to now by the recall half-life, then gains one.
+- [x] The update runs through an asynchronous memory writer, off the read path.
+- [x] The `RecallCountWritable` protocol carries `->pending` and `->writes`, with `TagRecallCount` and `MemoryRecallCount` records.
+- [x] The system wires `:engram.stats/tag-writer` and `:engram.stats/mem-writer` from the same `writer` function.
+- [x] `record!` becomes `record-pairs!`, a new `record-memories!` records ids, and one `drain!` serves both.
+- [x] The handler taps delivered ids through a transducer and records them once, never holding the full maps.
+- [x] The count write never touches `:memory/updated-at`.
+- [x] No response exposes the per-memory count.
+- [x] An existing memory starts at a lifetime of 0, a recent of 0.0, and no `last-recalled`, with no backfill.
+- [x] The glossary extends recall count, lifetime count, and recent count to a memory, and records that only `/memories/recall/*` increments.
+- [x] The tests query the database directly to verify the stored count.

@@ -4,15 +4,15 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A configuration category accepts either a cardinality shorthand or a map.
-- [ ] The map requires `:cardinality` and accepts an optional `:one-of` vector.
-- [ ] The `:one-of` vector lists the acceptable labels for that category.
-- [ ] A memory matching the configuration must use a label from the `:one-of` set for that category.
-- [ ] A label outside the set fails validation and returns the current configurations.
-- [ ] The server rejects a `:one-of` token that is not lowercase kebab-case, at load time.
-- [ ] The server rejects a map that omits `:cardinality`, at load time.
-- [ ] `GET /config` carries the map form.
-- [ ] The `engram-recall` and `migrate` skills document the map form.
-- [ ] `CONTEXT.md` and `deploy/engram-config.example.edn` show the map form.
+- [x] A configuration category accepts either a cardinality shorthand or a map.
+- [x] The map requires `:cardinality` and accepts an optional `:one-of` vector.
+- [x] The `:one-of` vector lists the acceptable labels for that category.
+- [x] A memory matching the configuration must use a label from the `:one-of` set for that category.
+- [x] A label outside the set fails validation and returns the current configurations.
+- [x] The server rejects a `:one-of` token that is not lowercase kebab-case, at load time.
+- [x] The server rejects a map that omits `:cardinality`, at load time.
+- [x] `GET /config` carries the map form.
+- [x] The `engram-recall` and `migrate` skills document the map form.
+- [x] `CONTEXT.md` and `deploy/engram-config.example.edn` show the map form.

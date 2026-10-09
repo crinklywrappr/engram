@@ -14,16 +14,16 @@ The skill reasons only from the live configuration and the live nonconforming se
 
 **Blocked by:** 05 (Return the memories that do not conform to the configuration).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The skill reads the live configurations and categories from `GET /config`.
-- [ ] The skill reads the nonconforming memories from `GET /memories/nonconforming`.
-- [ ] The skill reads the label vocabulary from `GET /recalls`, and the subagents and the master reuse an existing label over a near-duplicate.
-- [ ] The skill splits the memories into chunks and runs about ten Haiku subagents at a time.
-- [ ] Each subagent proposes the smallest conforming tag change for the memories it is confident about.
-- [ ] Each subagent writes a declined list for the memories it does not touch.
-- [ ] The skill works in waves and deletes each wave's files after it folds the results.
-- [ ] The master agent conforms the declined memories and asks the user only where it stays unsure.
-- [ ] Each batch entry lists the memory's full corrected tag set.
-- [ ] The skill writes the batch to a review file and sends nothing before approval.
-- [ ] The skill names no fixed category and survives any configuration change.
+- [x] The skill reads the live configurations and categories from `GET /config`.
+- [x] The skill reads the nonconforming memories from `GET /memories/nonconforming`.
+- [x] The skill reads the label vocabulary from `GET /recalls`, and the subagents and the master reuse an existing label over a near-duplicate.
+- [x] The skill splits the memories into chunks and runs about ten Haiku subagents at a time.
+- [x] Each subagent proposes the smallest conforming tag change for the memories it is confident about.
+- [x] Each subagent writes a declined list for the memories it does not touch.
+- [x] The skill works in waves and deletes each wave's files after it folds the results.
+- [x] The master agent conforms the declined memories and asks the user only where it stays unsure.
+- [x] Each batch entry lists the memory's full corrected tag set.
+- [x] The skill writes the batch to a review file and sends nothing before approval.
+- [x] The skill names no fixed category and survives any configuration change.

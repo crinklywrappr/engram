@@ -4,11 +4,11 @@
 
 **Blocked by:** 05 (Return the memories that do not conform to the configuration) and 08 (Move the recall counts off `/stats`).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `/stats` reports the fraction of the caller's memories that satisfy a configuration.
-- [ ] The value is a single decimal truncated to four decimal places.
-- [ ] The fraction reuses the conformance machinery from the nonconforming route.
-- [ ] The fraction reflects the server's current configuration.
-- [ ] The computation covers only the caller's own memories.
-- [ ] The `/stats` response schema names the new field.
+- [x] `/stats` reports the fraction of the caller's memories that satisfy a configuration.
+- [x] The value is a single decimal truncated to four decimal places.
+- [x] The fraction reuses the conformance machinery from the nonconforming route.
+- [x] The fraction reflects the server's current configuration.
+- [x] The computation covers only the caller's own memories.
+- [x] The `/stats` response schema names the new field.

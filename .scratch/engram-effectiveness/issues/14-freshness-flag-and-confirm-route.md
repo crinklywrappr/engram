@@ -20,24 +20,24 @@ The glossary gains the terms this ticket earns. `CONTEXT.md` defines Freshness, 
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Migration 004 adds `:memory/last-confirmed` as an additive instant attribute.
-- [ ] A create sets `last-confirmed` to the create instant, and an update sets it to the update instant.
-- [ ] A batch create and a batch update stamp `last-confirmed` through the shared build paths.
-- [ ] There is no data migration, and the freshness read falls back to `updated-at`, then `created-at`.
-- [ ] The `engram.freshness` namespace computes the value `0.5 ^ (age / freshness-half-life)` and the band.
-- [ ] The band follows the half-life split: fresh under one, aging one up to two, stale at two or beyond.
-- [ ] The `freshness` band lands on the recall wire for by-tags, by-ids, all-memories, nonconforming, and fetch.
-- [ ] A search row carries no `freshness` band.
-- [ ] The wire omits `last-confirmed`, `created-at`, `updated-at`, and `last-recalled`.
-- [ ] `MemoryOut` names a required `freshness` enum of `fresh`, `aging`, or `stale`.
-- [ ] `POST /memories/confirm` stamps `last-confirmed` to now for a batch of the caller's memory ids in one transaction.
-- [ ] The confirm route drops an unowned or absent id, collapses a repeat, and never touches `updated-at`.
-- [ ] The confirm route returns `{:confirmed n}` with the number of memories stamped.
-- [ ] `:half-life-days` is renamed `:recall-half-life-days`, and `:freshness-half-life-days` is added.
-- [ ] `load-config` defaults the recall half-life to 14 and the freshness half-life to 30.
-- [ ] When the file names a half-life, `validate-config` requires it to be a positive number.
-- [ ] The sample configuration shows both half-lives, and the read sites move to the new names.
-- [ ] The glossary defines Freshness, the fresh-aging-stale band, and Confirm.
-- [ ] The tests query the database directly to read the stored stamp and the confirm count.
+- [x] Migration 004 adds `:memory/last-confirmed` as an additive instant attribute.
+- [x] A create sets `last-confirmed` to the create instant, and an update sets it to the update instant.
+- [x] A batch create and a batch update stamp `last-confirmed` through the shared build paths.
+- [x] There is no data migration, and the freshness read falls back to `updated-at`, then `created-at`.
+- [x] The `engram.freshness` namespace computes the value `0.5 ^ (age / freshness-half-life)` and the band.
+- [x] The band follows the half-life split: fresh under one, aging one up to two, stale at two or beyond.
+- [x] The `freshness` band lands on the recall wire for by-tags, by-ids, all-memories, nonconforming, and fetch.
+- [x] A search row carries no `freshness` band.
+- [x] The wire omits `last-confirmed`, `created-at`, `updated-at`, and `last-recalled`.
+- [x] `MemoryOut` names a required `freshness` enum of `fresh`, `aging`, or `stale`.
+- [x] `POST /memories/confirm` stamps `last-confirmed` to now for a batch of the caller's memory ids in one transaction.
+- [x] The confirm route drops an unowned or absent id, collapses a repeat, and never touches `updated-at`.
+- [x] The confirm route returns `{:confirmed n}` with the number of memories stamped.
+- [x] `:half-life-days` is renamed `:recall-half-life-days`, and `:freshness-half-life-days` is added.
+- [x] `load-config` defaults the recall half-life to 14 and the freshness half-life to 30.
+- [x] When the file names a half-life, `validate-config` requires it to be a positive number.
+- [x] The sample configuration shows both half-lives, and the read sites move to the new names.
+- [x] The glossary defines Freshness, the fresh-aging-stale band, and Confirm.
+- [x] The tests query the database directly to read the stored stamp and the confirm count.

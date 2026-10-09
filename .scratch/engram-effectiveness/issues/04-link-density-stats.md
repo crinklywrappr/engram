@@ -4,10 +4,10 @@
 
 **Blocked by:** 08 (Move the recall counts off `/stats`).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `GET /stats` reports the average out-degree over `src` nodes.
-- [ ] `GET /stats` reports the largest weakly-connected component as a fraction of the nodes.
-- [ ] The metrics compute over the caller's own memories only.
-- [ ] The link-density metrics stand as their own part of the `/stats` body.
-- [ ] The response schema names the new metrics.
+- [x] `GET /stats` reports the average out-degree over `src` nodes.
+- [x] `GET /stats` reports the largest weakly-connected component as a fraction of the nodes.
+- [x] The metrics compute over the caller's own memories only.
+- [x] The link-density metrics stand as their own part of the `/stats` body.
+- [x] The response schema names the new metrics.

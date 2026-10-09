@@ -8,14 +8,14 @@ The skill prepares a batch body in the create, update, and delete shape. The ski
 
 **Blocked by:** 02 (Stream every memory over NDJSON at `GET /memories`).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The skill reads every memory through `GET /memories`.
-- [ ] The skill forms every unordered memory pair and splits them into fixed-size chunks.
-- [ ] The skill spawns a Haiku subagent per chunk and runs about ten at a time.
-- [ ] Each subagent judges its pairs and writes findings to a shared directory.
-- [ ] The master clusters duplicates by transitive closure and sweeps once more for a further merge.
-- [ ] A cluster resolves as one survivor, one new memory, or several new memories under one `src`.
-- [ ] The master names the `src` per cluster and repoints `related` edges off any dropped `src`.
-- [ ] The master reconciles tags by judgment, union or supersede, with no configuration key.
-- [ ] The skill writes the batch to a review file and sends nothing before user approval.
+- [x] The skill reads every memory through `GET /memories`.
+- [x] The skill forms every unordered memory pair and splits them into fixed-size chunks.
+- [x] The skill spawns a Haiku subagent per chunk and runs about ten at a time.
+- [x] Each subagent judges its pairs and writes findings to a shared directory.
+- [x] The master clusters duplicates by transitive closure and sweeps once more for a further merge.
+- [x] A cluster resolves as one survivor, one new memory, or several new memories under one `src`.
+- [x] The master names the `src` per cluster and repoints `related` edges off any dropped `src`.
+- [x] The master reconciles tags by judgment, union or supersede, with no configuration key.
+- [x] The skill writes the batch to a review file and sends nothing before user approval.

@@ -29,16 +29,16 @@ This ticket owns the whole restructuring in one change. It renames the pair rout
 
 **Blocked by:** None (can start immediately). It completes the search-then-recall workflow begun in ticket 11.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `/memories/recall` is renamed to `/memories/recall/by-tags`, with its body and behavior unchanged.
-- [ ] The rename updates the in-repo callers and the tests.
-- [ ] `/memories/recall/by-ids` accepts `{"ids": [...]}` and returns the matching memories plus their related closure.
-- [ ] The id recall returns the same NDJSON stream and JSON fallback as the pair recall.
-- [ ] The id recall uses the full recall wire shape, with no score and no category projection.
-- [ ] An empty `ids` list returns a 200 empty stream.
-- [ ] A foreign or missing id is skipped silently, and a non-UUID id is a 400.
-- [ ] Duplicate ids collapse to one memory.
-- [ ] Another user's memories never appear in the response.
-- [ ] The `engram-recall` skill folds search into the recall workflow, so search reads as the discovery step of a recall.
-- [ ] `CONTEXT.md` expands the `Recall` term and amends the `Search` term.
+- [x] `/memories/recall` is renamed to `/memories/recall/by-tags`, with its body and behavior unchanged.
+- [x] The rename updates the in-repo callers and the tests.
+- [x] `/memories/recall/by-ids` accepts `{"ids": [...]}` and returns the matching memories plus their related closure.
+- [x] The id recall returns the same NDJSON stream and JSON fallback as the pair recall.
+- [x] The id recall uses the full recall wire shape, with no score and no category projection.
+- [x] An empty `ids` list returns a 200 empty stream.
+- [x] A foreign or missing id is skipped silently, and a non-UUID id is a 400.
+- [x] Duplicate ids collapse to one memory.
+- [x] Another user's memories never appear in the response.
+- [x] The `engram-recall` skill folds search into the recall workflow, so search reads as the discovery step of a recall.
+- [x] `CONTEXT.md` expands the `Recall` term and amends the `Search` term.

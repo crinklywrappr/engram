@@ -12,13 +12,13 @@ No external consumer reads this route. The wire change needs no compatibility sh
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `CONTEXT.md` drops the `_Avoid_: tag (when it means the pair)` line. It names "tag" as the word for a category:label pair. It keeps "category:label pair" as the structural spelling.
-- [ ] `/memories/recall/by-tags` accepts `{"tags": [["category","label"], ...]}`. A `{"pairs": ...}` body no longer matches.
-- [ ] The request schema, the handler binding, the NDJSON header, and the JSON fallback all carry the selector under `tags`.
-- [ ] The recall function and its lookup are renamed to `recall-by-tags` and `eids-by-tag`. Every in-repo caller moves with them.
-- [ ] The tuple type stays named `Pair`.
-- [ ] The engram-recall skill example uses the `tags` body key.
-- [ ] The stats internal "pair" identifiers stay unchanged.
-- [ ] The tests move to the `tags` body key and the renamed functions. The full suite passes.
+- [x] `CONTEXT.md` drops the `_Avoid_: tag (when it means the pair)` line. It names "tag" as the word for a category:label pair. It keeps "category:label pair" as the structural spelling.
+- [x] `/memories/recall/by-tags` accepts `{"tags": [["category","label"], ...]}`. A `{"pairs": ...}` body no longer matches.
+- [x] The request schema, the handler binding, the NDJSON header, and the JSON fallback all carry the selector under `tags`.
+- [x] The recall function and its lookup are renamed to `recall-by-tags` and `eids-by-tag`. Every in-repo caller moves with them.
+- [x] The tuple type stays named `Pair`.
+- [x] The engram-recall skill example uses the `tags` body key.
+- [x] The stats internal "pair" identifiers stay unchanged.
+- [x] The tests move to the `tags` body key and the renamed functions. The full suite passes.

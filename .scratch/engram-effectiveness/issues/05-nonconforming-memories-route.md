@@ -4,14 +4,14 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The route streams the caller's memories that satisfy no current configuration.
-- [ ] A memory that satisfies a configuration never appears.
-- [ ] Each line carries content and tags, in the recall memory shape.
-- [ ] The route reuses the existing configuration tag check.
-- [ ] The result reflects the server's current configuration with no code change.
-- [ ] Another user's memories never appear in the response.
-- [ ] The route is `GET /memories/nonconforming` and takes no request body.
-- [ ] A new `engram.memory/nonconforming` filters the all-memories stream by an injected conformance predicate.
-- [ ] The handler passes `config/tag-error` with the live tag-schema, so the memory namespace holds no configuration dependency.
+- [x] The route streams the caller's memories that satisfy no current configuration.
+- [x] A memory that satisfies a configuration never appears.
+- [x] Each line carries content and tags, in the recall memory shape.
+- [x] The route reuses the existing configuration tag check.
+- [x] The result reflects the server's current configuration with no code change.
+- [x] Another user's memories never appear in the response.
+- [x] The route is `GET /memories/nonconforming` and takes no request body.
+- [x] A new `engram.memory/nonconforming` filters the all-memories stream by an injected conformance predicate.
+- [x] The handler passes `config/tag-error` with the live tag-schema, so the memory namespace holds no configuration dependency.

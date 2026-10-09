@@ -4,10 +4,10 @@
 
 **Blocked by:** 07 (Serve the recall counts from a `/recalls` route).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `/stats` no longer carries the recall counts.
-- [ ] The `engram-recall` skill reads the recall counts from `/recalls`.
-- [ ] The `migrate` skill reads its label vocabulary from `/recalls`.
-- [ ] Every document that referenced the recall counts under `/stats` now names `/recalls`.
-- [ ] The `/stats` response schema drops the recalls shape.
+- [x] `/stats` no longer carries the recall counts.
+- [x] The `engram-recall` skill reads the recall counts from `/recalls`.
+- [x] The `migrate` skill reads its label vocabulary from `/recalls`.
+- [x] Every document that referenced the recall counts under `/stats` now names `/recalls`.
+- [x] The `/stats` response schema drops the recalls shape.

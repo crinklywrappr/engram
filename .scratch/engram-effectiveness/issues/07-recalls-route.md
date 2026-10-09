@@ -4,14 +4,14 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `GET /recalls` returns the caller's recall-count rows.
-- [ ] Each row carries category, label, count, lifetime, and recent.
-- [ ] The body is a bare `{"recalls": [...]}` map without the `{"stats": ...}` wrapper.
-- [ ] The route reuses the current recall-count computation.
-- [ ] One user never sees another user's rows.
-- [ ] The response schema names the recalls shape.
-- [ ] `GET /recalls` accepts an optional `categories` parameter.
-- [ ] A category filter returns only rows whose category is in the list.
-- [ ] No category filter returns every row.
+- [x] `GET /recalls` returns the caller's recall-count rows.
+- [x] Each row carries category, label, count, lifetime, and recent.
+- [x] The body is a bare `{"recalls": [...]}` map without the `{"stats": ...}` wrapper.
+- [x] The route reuses the current recall-count computation.
+- [x] One user never sees another user's rows.
+- [x] The response schema names the recalls shape.
+- [x] `GET /recalls` accepts an optional `categories` parameter.
+- [x] A category filter returns only rows whose category is in the list.
+- [x] No category filter returns every row.
