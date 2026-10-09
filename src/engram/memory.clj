@@ -101,8 +101,11 @@
                          (map (fn [r] [:db/retract eid :memory/related r]) old-rel))
         now  (Date.)
         ;; An edit reconfirms the fact, so updated-at and last-confirmed move
-        ;; together, keeping created-at <= updated-at <= last-confirmed.
-        base (cond-> {:db/id eid :memory/updated-at now :memory/last-confirmed now}
+        ;; together. An empty fields set is a bare confirm: it stamps
+        ;; last-confirmed alone and leaves updated-at, keeping
+        ;; created-at <= updated-at <= last-confirmed.
+        base (cond-> {:db/id eid :memory/last-confirmed now}
+               (seq fields)                (assoc :memory/updated-at now)
                (contains? fields :content) (assoc :memory/content (:content fields))
                (contains? fields :tags)    (assoc :memory/tag (mapv tag-tx (:tags fields)))
                (contains? fields :related) (assoc :memory/related (vec (:related fields))))]
@@ -119,7 +122,9 @@
 
 (defn update!
   "Correct a fact in place. Replaces content, tags, and related when supplied.
-  Returns the id string, or nil when the memory does not exist for this user."
+  An empty payload is a bare confirm: it stamps last-confirmed alone and leaves
+  updated-at, the same effect as the confirm route. Returns the id string, or nil
+  when the memory does not exist for this user."
   [conn user id payload]
   (let [db  (d/db conn)
         eid (eid-of db user id)]

@@ -1455,6 +1455,58 @@
           (is (not (.after ^java.util.Date (updated-at conn id) (last-confirmed conn id))))))
       (finally (d/close conn)))))
 
+(deftest bare-update-confirms-without-touching-updated-at
+  (let [conn (fresh-conn)]
+    (try
+      (let [id   (memory/create! conn "alice" {:content "x" :src "s" :tags [["domain" "clojure"]]})
+            upd0 (updated-at conn id)
+            lc0  (last-confirmed conn id)]
+        (Thread/sleep 5)
+        (testing "an empty-payload update confirms, returning the id"
+          (is (= id (memory/update! conn "alice" id {}))))
+        (testing "the bare update moved last-confirmed forward"
+          (is (.after ^java.util.Date (last-confirmed conn id) lc0)))
+        (testing "the bare update left updated-at untouched"
+          (is (= upd0 (updated-at conn id))))
+        (Thread/sleep 5)
+        (memory/update! conn "alice" id {:content "y"})
+        (testing "a field update still moves updated-at and last-confirmed together"
+          (is (= (updated-at conn id) (last-confirmed conn id)))
+          (is (.after ^java.util.Date (updated-at conn id) upd0))))
+      (finally (d/close conn)))))
+
+(deftest confirm-via-empty-put-and-bare-batch-update
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [id   (:id (body-json (request app :post "/memories"
+                                          {:user "alice" :accept "application/json"
+                                           :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})))
+            upd0 (updated-at conn id)
+            lc0  (last-confirmed conn id)]
+        (Thread/sleep 5)
+        (testing "an empty-body PUT confirms, returning 200 and the id"
+          (let [resp (request app :put (str "/memories/" id)
+                              {:user "alice" :accept "application/json" :body {}})]
+            (is (== 200 (:status resp)))
+            (is (= id (:id (body-json resp))))))
+        (testing "the empty PUT moved last-confirmed forward and left updated-at"
+          (is (.after ^java.util.Date (last-confirmed conn id) lc0))
+          (is (= upd0 (updated-at conn id))))
+        (let [lc1 (last-confirmed conn id)]
+          (Thread/sleep 5)
+          (testing "a bare :id update inside a batch confirms, with an applied count of one"
+            (let [resp (request app :post "/memories/batch"
+                                {:user "alice" :accept "application/json"
+                                 :body {:update [{:id id}]}})
+                  body (body-json resp)]
+              (is (== 200 (:status resp)))
+              (is (== 1 (:applied body)))))
+          (testing "the bare batch update moved last-confirmed forward and left updated-at"
+            (is (.after ^java.util.Date (last-confirmed conn id) lc1))
+            (is (= upd0 (updated-at conn id))))))
+      (finally (d/close conn)))))
+
 (deftest confirm-stamps-owned-only
   (let [conn (fresh-conn)]
     (try
