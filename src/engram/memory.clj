@@ -89,9 +89,9 @@
        db (UUID/fromString id-str) user))
 
 (defn- update-tx
-  "Tx-data that sets `eid` to the merged `fields`, replacing tags and related in
-  place. Only a field present in `fields` is touched. The single build path for
-  an in-place correction."
+  "Tx-data that sets `eid` to the merged `fields`, replacing src, tags, and
+  related in place. Only a field present in `fields` is touched. The single
+  build path for an in-place correction."
   [db eid fields]
   (let [old-tags (when (contains? fields :tags)
                    (d/q '[:find [?t ...] :in $ ?e :where [?e :memory/tag ?t]] db eid))
@@ -107,24 +107,26 @@
         base (cond-> {:db/id eid :memory/last-confirmed now}
                (seq fields)                (assoc :memory/updated-at now)
                (contains? fields :content) (assoc :memory/content (:content fields))
+               (contains? fields :src)     (assoc :memory/src (:src fields))
                (contains? fields :tags)    (assoc :memory/tag (mapv tag-tx (:tags fields)))
                (contains? fields :related) (assoc :memory/related (vec (:related fields))))]
     (concat retracts [base])))
 
 (defn- ->fields
-  "Reduce a supplied {:content :tags :related} payload to the fields to touch:
-  content when present, tags and related only when non-empty."
-  [{:keys [content tags related]}]
+  "Reduce a supplied {:content :src :tags :related} payload to the fields to
+  touch: content and src when present, tags and related only when non-empty."
+  [{:keys [content src tags related]}]
   (cond-> {}
     (some? content) (assoc :content content)
+    (some? src)     (assoc :src src)
     (seq tags)      (assoc :tags tags)
     (seq related)   (assoc :related related)))
 
 (defn update!
-  "Correct a fact in place. Replaces content, tags, and related when supplied.
-  An empty payload is a bare confirm: it stamps last-confirmed alone and leaves
-  updated-at, the same effect as the confirm route. Returns the id string, or nil
-  when the memory does not exist for this user."
+  "Correct a fact in place. Replaces content, src, tags, and related when
+  supplied. An empty payload is a bare confirm: it stamps last-confirmed
+  alone and leaves updated-at, the same effect as the confirm route. Returns
+  the id string, or nil when the memory does not exist for this user."
   [conn user id payload]
   (let [db  (d/db conn)
         eid (eid-of db user id)]

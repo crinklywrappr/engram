@@ -1507,6 +1507,44 @@
             (is (= upd0 (updated-at conn id))))))
       (finally (d/close conn)))))
 
+(deftest src-correction-put-and-batch
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [id (:id (body-json (request app :post "/memories"
+                                        {:user "alice" :accept "application/json"
+                                         :body {:content "x" :src "old-src" :tags [["domain" "clojure"]]}})))
+            fetch (fn [] (body-json (request app :get (str "/memories/" id)
+                                             {:user "alice" :accept "application/json"})))]
+        (testing "a PUT that carries a new src replaces the src, returns 200 and the id"
+          (let [resp (request app :put (str "/memories/" id)
+                              {:user "alice" :accept "application/json" :body {:src "new-src"}})]
+            (is (== 200 (:status resp)))
+            (is (= id (:id (body-json resp))))))
+        (testing "the memory reads back with the new src, content intact"
+          (let [m (fetch)]
+            (is (= "new-src" (:src m)))
+            (is (= "x" (:content m)))))
+        (testing "an update that omits src leaves the current src unchanged"
+          (request app :put (str "/memories/" id)
+                   {:user "alice" :accept "application/json" :body {:content "y"}})
+          (let [m (fetch)]
+            (is (= "new-src" (:src m)))
+            (is (= "y" (:content m)))))
+        (testing "a malformed src on a PUT is a 400 at coercion"
+          (is (== 400 (:status (request app :put (str "/memories/" id)
+                                        {:user "alice" :accept "application/json"
+                                         :body {:src "Bad_Src"}})))))
+        (testing "a batch update that carries a src replaces the src in the same batch"
+          (let [resp (request app :post "/memories/batch"
+                              {:user "alice" :accept "application/json"
+                               :body {:update [{:id id :src "batch-src"}]}})
+                body (body-json resp)]
+            (is (== 200 (:status resp)))
+            (is (== 1 (:applied body)))
+            (is (= "batch-src" (:src (fetch)))))))
+      (finally (d/close conn)))))
+
 (deftest confirm-stamps-owned-only
   (let [conn (fresh-conn)]
     (try

@@ -130,9 +130,9 @@ Rules:
 engram keeps no history. Read a fact first with `GET /memories/<id>`. It returns
 the memory in the recall shape, or 404 for an id that is not yours. Read the
 current state before you change or remove a fact. To correct a fact, edit it in
-place with `PUT /memories/<id>` using the same body shape without `src`. To remove
-a fact, delete it with `DELETE /memories/<id>`. A delete returns 200, and a delete
-of a memory that is not yours returns 404.
+place with `PUT /memories/<id>` using the same body shape. A correction can change
+`src` too. To remove a fact, delete it with `DELETE /memories/<id>`. A delete
+returns 200, and a delete of a memory that is not yours returns 404.
 
 ## Store or change many at once
 

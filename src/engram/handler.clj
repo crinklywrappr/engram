@@ -163,10 +163,10 @@
 (defn- update-handler [conn cfg req]
   (let [user (:engram/user req)
         id   (get-in req [:parameters :path :id])
-        {:keys [content tags related]} (get-in req [:parameters :body])]
+        {:keys [content src tags related]} (get-in req [:parameters :body])]
     (if-let [err (config/update-tag-error (:tag-schema cfg) tags)]
       (reject-409 user cfg err)
-      (if (memory/update! conn user id {:content content :tags tags :related related})
+      (if (memory/update! conn user id {:content content :src src :tags tags :related related})
         {:status 200 :body {:id id}}
         {:status 404 :body {:error "not found"}}))))
 

@@ -18,6 +18,7 @@
 (def UpdateBody
   [:map
    [:content {:optional true} [:string {:min 1}]]
+   [:src {:optional true} config/Token]
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
@@ -56,6 +57,7 @@
   [:map
    [:id IdStr]
    [:content {:optional true} [:string {:min 1}]]
+   [:src {:optional true} config/Token]
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
