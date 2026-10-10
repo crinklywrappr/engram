@@ -122,27 +122,156 @@
     (seq tags)      (assoc :tags tags)
     (seq related)   (assoc :related related)))
 
+;; ---------- related repair (keep the related graph whole after a write) ----------
+
+(defn- src-of [db eid] (:memory/src (d/pull db [:memory/src] eid)))
+
+(defn- memories-with-src
+  "Eids of `user`'s memories that carry `src`."
+  [db user src]
+  (d/q '[:find [?e ...] :in $ ?u ?s
+         :where [?e :memory/user ?u] [?e :memory/src ?s]]
+       db user src))
+
+(defn- related-referrers
+  "Eids of `user`'s memories whose `related` names `src`."
+  [db user src]
+  (d/q '[:find [?e ...] :in $ ?u ?s
+         :where [?e :memory/user ?u] [?e :memory/related ?s]]
+       db user src))
+
+(defn- single-src? [db user src]
+  (== 1 (count (memories-with-src db user src))))
+
+(defn- plan-repair-for-batch
+  "Related repair datoms for a batch over `db`, scoped to `user`. Only a src the
+  batch empties is repaired: every memory whose related names it loses it and gains
+  the srcs its memories moved to, none for a plain delete. A src the batch leaves
+  populated needs no repair, so a swap or a cycle makes no edit. The datoms commit
+  in the same transaction as the batch, so a reader never sees a dangling related.
+
+  - `deletes`      memories the batch removes e.g. `[{:eid e :src \"a\"} ...]`.
+  - `renames`      src moves the batch makes e.g. `[{:old \"a\" :new \"b\"} ...]`.
+  - `created-srcs` srcs the batch adds e.g. `[\"a\" \"b\"]`.
+  - `exempt`       eids the repair leaves to the batch, because it rewrites their
+                   related itself, `#{e1 e2}`."
+  [db user {:keys [deletes renames created-srcs exempt]
+            :or {deletes [] renames [] created-srcs [] exempt #{}}}]
+  (let [touched (into #{} (concat (map :src deletes) (map :old renames)))
+
+        ;; Net population change per src. A memory scores -1 at the src it leaves
+        ;; and +1 at the src it enters: a delete leaves to nowhere, a create enters
+        ;; from nowhere, a rename does both. So pre-count + delta = post-count.
+        delta (as-> {} $
+                (reduce
+                 (fn [m {:keys [src]}]
+                   (update m src (fnil dec 0)))
+                 $ deletes)
+                (reduce
+                 (fn [m {:keys [old new]}]
+                   (-> m (update old (fnil dec 0))
+                       (update new (fnil inc 0))))
+                 $ renames)
+                (reduce
+                 (fn [m s]
+                   (update m s (fnil inc 0)))
+                 $ created-srcs))
+
+        ;; empty after the batch: the pre-count plus the net change is zero
+        dead? (fn [src]
+                (zero? (+ (count (memories-with-src db user src))
+                          (delta src 0))))
+
+        dead  (filter dead? touched)
+
+        dests (reduce
+               (fn [m {:keys [old new]}]
+                 (update m old (fnil conj #{}) new))
+               {} renames)
+
+        skip  (into exempt (map :eid deletes))]
+    (for [old dead
+          ref (remove skip (related-referrers db user old))
+          datom (cons [:db/retract ref :memory/related old]
+                      (for [n (dests old)]
+                        [:db/add ref :memory/related n]))]
+      datom)))
+
+(defn- batch-src-moves
+  "Turn a planned batch into the src moves `plan-repair-for-batch` reads: the
+  deletes with their srcs, the net renames, the created srcs, and the eids whose
+  related the batch rewrites. `fold` is the merged updates (eid -> fields),
+  `delete-eids` the removed eids, `creates` the create payloads."
+  [db fold delete-eids creates]
+  (letfn [(make-delete [eid] {:eid eid :src (src-of db eid)})
+          (make-rename [[eid fields]]
+            (when (contains? fields :src)
+              (let [o (src-of db eid)]
+                (when (not= (:src fields) o)
+                  {:old o :new (:src fields)}))))
+          (make-exempt [[eid fields]]
+            (when (contains? fields :related) eid))]
+    (let [renames (keep make-rename fold)
+          exempt  (keep make-exempt fold)]
+      (cond-> {}
+        (seq delete-eids) (assoc :deletes (map make-delete delete-eids))
+        (seq renames) (assoc :renames renames)
+        (seq creates) (assoc :created-srcs (map :src creates))
+        (seq exempt) (assoc :exempt (into #{} exempt))))))
+
+(defn- plan-repair-for-delete
+  "retract dangling related values"
+  [db user deleted-eid deleted-src]
+  (when (single-src? db user deleted-src)
+    (for [ref (remove #{deleted-eid} (related-referrers db user deleted-src))]
+      [:db/retract ref :memory/related deleted-src])))
+
+(defn- plan-repair-for-update
+  "related memories follow a memory when renamed, only
+   when the `src` is not shared with other memories."
+  [db user eid fields]
+  (let [old-src (src-of db eid)
+        new-src (:src fields)]
+    (when (and new-src (not= new-src old-src) (single-src? db user old-src))
+      ;; skip this memory when its own related is being rewritten, so the repair
+      ;; does not add the new src on top of the related the caller just set.
+      (let [skip-self (if (contains? fields :related) #{eid} #{})
+            replace-fn (fn [ref] [[:db/retract ref :memory/related old-src]
+                                 [:db/add ref :memory/related new-src]])]
+        (->> (related-referrers db user old-src)
+             (remove skip-self)
+             (mapcat replace-fn))))))
+
 (defn update!
   "Correct a fact in place. Replaces content, src, tags, and related when
-  supplied. An empty payload is a bare confirm: it stamps last-confirmed
-  alone and leaves updated-at, the same effect as the confirm route. Returns
-  the id string, or nil when the memory does not exist for this user."
+  supplied. A src change repairs the related space in the same transaction, so no
+  other memory is left pointing at a src that no longer has a memory. An empty
+  payload is a bare confirm: it stamps last-confirmed alone and leaves updated-at,
+  the same effect as the confirm route. Returns the id string, or nil when the
+  memory does not exist for this user."
   [conn user id payload]
   (let [db  (d/db conn)
         eid (eid-of db user id)]
     (when eid
-      (d/transact! conn (update-tx db eid (->fields payload)))
-      id)))
+      (let [fields (->fields payload)
+            tx     (into (vec (update-tx db eid fields))
+                         (plan-repair-for-update db user eid fields))]
+        (d/transact! conn tx)
+        id))))
 
 (defn delete!
   "Delete `user`'s own memory. Retracting the entity also retracts its component
-  tags. Returns the id string, or nil when the memory does not exist for this
-  user."
+  tags. The delete repairs the related space in the same transaction, so no other
+  memory is left pointing at a src the delete emptied. Returns the id string, or
+  nil when the memory does not exist for this user."
   [conn user id]
-  (let [eid (eid-of (d/db conn) user id)]
+  (let [db  (d/db conn)
+        eid (eid-of db user id)]
     (when eid
-      (d/transact! conn [[:db/retractEntity eid]])
-      id)))
+      (let [tx (into [[:db/retractEntity eid]]
+                     (plan-repair-for-delete db user eid (src-of db eid)))]
+        (d/transact! conn tx)
+        id))))
 
 (defn confirm!
   "Stamp last-confirmed to now for each of `ids` the caller owns, in one
@@ -223,13 +352,16 @@
       (let [pairs          (mapv #(create-tx user %) creates)
             ids            (mapv (comp str first) pairs)
             create-tx-data (map second pairs)
-            fold           (reduce (fn [m {:keys [eid payload]}]
-                                     (update m eid merge-update-fields payload))
-                                   {} update-results)
+            fold           (reduce
+                            (fn [m {:keys [eid payload]}]
+                              (update m eid merge-update-fields payload))
+                            {} update-results)
             update-tx-data (mapcat (fn [[eid fields]] (update-tx db eid fields)) fold)
             delete-eids    (distinct (map :eid delete-results))
             delete-tx-data (map (fn [eid] [:db/retractEntity eid]) delete-eids)
-            tx-data        (vec (concat create-tx-data update-tx-data delete-tx-data))]
+            repair-tx-data (->> (batch-src-moves db fold delete-eids creates)
+                                (plan-repair-for-batch db user))
+            tx-data        (vec (concat create-tx-data update-tx-data delete-tx-data repair-tx-data))]
         {:ok? true :ids ids :tx-data tx-data
          :applied (+ (count ids) (count fold) (count delete-eids))}))))
 

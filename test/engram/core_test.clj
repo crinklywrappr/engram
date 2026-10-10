@@ -70,6 +70,16 @@
          :where [?e :memory/id ?id] [?e :memory/last-confirmed ?lc]]
        (d/db conn) (java.util.UUID/fromString id)))
 
+(defn- related-set [conn id]
+  (set (d/q '[:find [?r ...] :in $ ?id
+              :where [?e :memory/id ?id] [?e :memory/related ?r]]
+            (d/db conn) (java.util.UUID/fromString id))))
+
+(defn- src-val [conn id]
+  (d/q '[:find ?s . :in $ ?id
+         :where [?e :memory/id ?id] [?e :memory/src ?s]]
+       (d/db conn) (java.util.UUID/fromString id)))
+
 ;; ---------- tag and token validation ----------
 
 (deftest tag-validation
@@ -1543,6 +1553,139 @@
             (is (== 200 (:status resp)))
             (is (== 1 (:applied body)))
             (is (= "batch-src" (:src (fetch)))))))
+      (finally (d/close conn)))))
+
+(deftest related-repair-delete
+  (let [conn (fresh-conn)]
+    (try
+      (testing "deleting the sole holder of a src removes the dangling related (action 3)"
+        (let [a (memory/create! conn "alice" {:content "a" :src "a"})
+              r (memory/create! conn "alice" {:content "r" :src "r" :related ["a"]})]
+          (memory/delete! conn "alice" a)
+          (is (= #{} (related-set conn r)))))
+      (testing "deleting one holder when a sibling keeps the src leaves the related intact"
+        (let [b1 (memory/create! conn "alice" {:content "b1" :src "b"})
+              _b2 (memory/create! conn "alice" {:content "b2" :src "b"})
+              r  (memory/create! conn "alice" {:content "rb" :src "rb" :related ["b"]})]
+          (memory/delete! conn "alice" b1)
+          (is (= #{"b"} (related-set conn r)))))
+      (finally (d/close conn)))))
+
+(deftest related-repair-rename
+  (let [conn (fresh-conn)]
+    (try
+      (testing "renaming the sole holder replaces the old src with the new (action 2)"
+        (let [m (memory/create! conn "alice" {:content "m" :src "old"})
+              r (memory/create! conn "alice" {:content "r" :src "r" :related ["old"]})]
+          (memory/update! conn "alice" m {:src "new"})
+          (is (= "new" (src-val conn m)))
+          (is (= #{"new"} (related-set conn r)))))
+      (testing "renaming one holder while a sibling keeps the old src leaves referrers alone"
+        (let [m1 (memory/create! conn "alice" {:content "m1" :src "shared"})
+              _m2 (memory/create! conn "alice" {:content "m2" :src "shared"})
+              r  (memory/create! conn "alice" {:content "rs" :src "rs" :related ["shared"]})]
+          (memory/update! conn "alice" m1 {:src "moved"})
+          (is (= #{"shared"} (related-set conn r)))))
+      (testing "a rename that also rewrites the memory's own related repairs others but keeps the caller's related"
+        (let [m (memory/create! conn "alice" {:content "m" :src "solo" :related ["x"]})
+              r (memory/create! conn "alice" {:content "r" :src "r" :related ["solo"]})]
+          (memory/update! conn "alice" m {:src "solo2" :related ["y"]})
+          (is (= "solo2" (src-val conn m)))
+          (is (= #{"y"} (related-set conn m)))
+          (is (= #{"solo2"} (related-set conn r)))))
+      (finally (d/close conn)))))
+
+(deftest related-repair-batch-net-effect
+  (let [conn (fresh-conn)]
+    (try
+      (testing "a batch that deletes a src and recreates it leaves referrers intact"
+        (let [a (memory/create! conn "alice" {:content "a" :src "a"})
+              r (memory/create! conn "alice" {:content "r" :src "r" :related ["a"]})
+              res (memory/apply-batch! conn "alice"
+                                       {:create [{:content "a-again" :src "a"}]
+                                        :delete [a]}
+                                       (constantly nil) (constantly nil))]
+          (is (:ok? res))
+          (is (= #{"a"} (related-set conn r)))))
+      (testing "a batch delete that empties a src repairs the referrer in the one transaction"
+        (let [x (memory/create! conn "alice" {:content "x" :src "x"})
+              r (memory/create! conn "alice" {:content "rx" :src "rx" :related ["x"]})
+              res (memory/apply-batch! conn "alice" {:delete [x]}
+                                       (constantly nil) (constantly nil))]
+          (is (:ok? res))
+          (is (= #{} (related-set conn r)))))
+      (testing "a batch update that renames the sole holder replaces the referrer's src"
+        (let [m (memory/create! conn "alice" {:content "m" :src "p"})
+              r (memory/create! conn "alice" {:content "rp" :src "rp" :related ["p"]})
+              res (memory/apply-batch! conn "alice" {:update [{:id m :src "q"}]}
+                                       (constantly nil) (constantly nil))]
+          (is (:ok? res))
+          (is (= #{"q"} (related-set conn r)))))
+      (testing "a batch src swap leaves both referrers alone, no over-reach"
+        (let [x  (memory/create! conn "alice" {:content "x" :src "sa"})
+              y  (memory/create! conn "alice" {:content "y" :src "sb"})
+              ra (memory/create! conn "alice" {:content "ra" :src "ra" :related ["sa"]})
+              rb (memory/create! conn "alice" {:content "rb" :src "rb" :related ["sb"]})
+              res (memory/apply-batch! conn "alice"
+                                       {:update [{:id x :src "sb"} {:id y :src "sa"}]}
+                                       (constantly nil) (constantly nil))]
+          (is (:ok? res))
+          (is (= #{"sa"} (related-set conn ra)))
+          (is (= #{"sb"} (related-set conn rb)))))
+      (finally (d/close conn)))))
+
+(deftest related-repair-per-user
+  (let [conn (fresh-conn)]
+    (try
+      (testing "a repair for one user never touches another user's same-named src"
+        (let [a-alice (memory/create! conn "alice" {:content "a" :src "a"})
+              r-alice (memory/create! conn "alice" {:content "ra" :src "ra" :related ["a"]})
+              _a-bob  (memory/create! conn "bob"   {:content "a" :src "a"})
+              r-bob   (memory/create! conn "bob"   {:content "rb" :src "rb" :related ["a"]})]
+          (memory/delete! conn "alice" a-alice)
+          (is (= #{} (related-set conn r-alice)))
+          (is (= #{"a"} (related-set conn r-bob)))))
+      (finally (d/close conn)))))
+
+(deftest related-repair-only-on-src-change
+  (let [conn (fresh-conn)]
+    (try
+      (let [m (memory/create! conn "alice" {:content "m" :src "s"})
+            r (memory/create! conn "alice" {:content "r" :src "r" :related ["s"]})]
+        (testing "a content-only update does no repair and leaves the src"
+          (memory/update! conn "alice" m {:content "m2"})
+          (is (= "s" (src-val conn m)))
+          (is (= #{"s"} (related-set conn r))))
+        (testing "a bare confirm does no repair"
+          (memory/update! conn "alice" m {})
+          (is (= #{"s"} (related-set conn r)))))
+      (finally (d/close conn)))))
+
+(deftest plan-repair-for-batch-unit
+  (let [conn (fresh-conn)
+        plan (fn [moves] (#'memory/plan-repair-for-batch (d/db conn) "alice" moves))
+        eid  (fn [id] (#'memory/eid-of (d/db conn) "alice" id))]
+    (try
+      (let [m  (memory/create! conn "alice" {:content "m" :src "a"})
+            r  (memory/create! conn "alice" {:content "r" :src "r" :related ["a"]})
+            em (eid m)
+            er (eid r)]
+        (testing "a delete that empties the src retracts it from the referrer"
+          (is (= [[:db/retract er :memory/related "a"]]
+                 (plan {:deletes [{:eid em :src "a"}]}))))
+        (testing "a rename that empties the src repoints the referrer"
+          (is (= [[:db/retract er :memory/related "a"]
+                  [:db/add er :memory/related "b"]]
+                 (plan {:renames [{:old "a" :new "b"}]}))))
+        (testing "an exempt referrer is left to the batch"
+          (is (empty? (plan {:deletes [{:eid em :src "a"}] :exempt #{er}}))))
+        (testing "an empty moves map plans nothing"
+          (is (empty? (plan {}))))
+        (testing "a delete offset by a create at the same src is not dead, so no repair"
+          (is (empty? (plan {:deletes [{:eid em :src "a"}] :created-srcs ["a"]}))))
+        (memory/create! conn "alice" {:content "m2" :src "a"})
+        (testing "a src a sibling keeps is not dead, so no repair"
+          (is (empty? (plan {:deletes [{:eid em :src "a"}]})))))
       (finally (d/close conn)))))
 
 (deftest confirm-stamps-owned-only
