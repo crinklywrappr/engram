@@ -99,8 +99,12 @@
                          0.0)})
           (pair-rows (d/db conn) user))))
 
-(defn- extant-recalls [db user category label]
-  (d/q '[:find [?life ?dec ?last]
+(defn- extant-recalls
+  "The stat row for the pair, as `[eid lifetime decayed last-request]`, or nil
+  when no row exists yet. The eid lets the write target the existing row inside a
+  transaction function, where a new row needs an explicit tempid instead."
+  [db user category label]
+  (d/q '[:find [?s ?life ?dec ?last]
          :in $ ?u ?c ?l
          :where [?s :stat/user ?u]
                 [?s :stat/category ?c]
@@ -114,15 +118,18 @@
   "Pure. Build the batched stat transaction for `user` over `pair-counts`, a map
   of [category label] to a coalesced count. For each pair, read the current row
   from `db`, decay the stored weight to `flush-ms`, and add the count to the
-  lifetime and to the decayed weight. Return a vector of tx-maps, empty when
-  `pair-counts` is empty. Take no connection and perform no write."
+  lifetime and to the decayed weight. An existing row writes by its eid, and a new
+  row carries a tempid, so the map transacts inside a transaction function. Return
+  a vector of tx-maps, empty when `pair-counts` is empty. Take no connection and
+  perform no write."
   [db user half-life-days pair-counts flush-ms]
   (mapv (fn [[[c l] n]]
-          (let [[life decayed ^Date last] (extant-recalls db user c l)
+          (let [[eid life decayed ^Date last] (extant-recalls db user c l)
                 base (if last
                        (decay/project half-life-days decayed last flush-ms)
                        0.0)]
-            {:stat/user user :stat/category c :stat/label l
+            {:db/id (or eid (str (gensym "stat")))
+             :stat/user user :stat/category c :stat/label l
              :stat/lifetime (+ (long (or life 0)) (long n))
              :stat/decayed  (+ base (double n))
              :stat/last-request (Date. flush-ms)}))
@@ -136,6 +143,12 @@
   (reduce (fn [m [[user c l] n]] (assoc-in m [user [c l]] n)) {} pending-recalls))
 
 ;; ---------- per-memory recall count ----------
+
+(defn- memory-eid
+  "The eid of the memory with `uuid`, or nil when no such memory exists. The
+  existence check that lets a flush skip a memory a concurrent delete removed."
+  [db ^UUID uuid]
+  (d/q '[:find ?e . :in $ ?id :where [?e :memory/id ?id]] db uuid))
 
 (defn- extant-memory-recall
   "The memory's stored recall columns [lifetime decayed last-recalled], or nil
@@ -153,18 +166,21 @@
   "Pure. Build the batched memory-recall transaction over `id-counts`, a map of
   memory-id string to a coalesced count. For each id, read the memory's current
   recall columns, decay the stored weight to `flush-ms`, and add the count to
-  both the lifetime and the decayed weight. The upsert is by `:memory/id`. Return
-  a vector of tx-maps, empty when `id-counts` is empty. Take no connection and
-  perform no write."
+  both the lifetime and the decayed weight. Skip an id whose memory is gone, so a
+  flush that loses a race to a delete drops the count rather than resurrecting a
+  ghost. The write targets the memory's eid. Return a vector of tx-maps, empty
+  when `id-counts` is empty. Take no connection and perform no write."
   [db half-life-days id-counts flush-ms]
-  (mapv (fn [[id n]]
-          (let [uuid (UUID/fromString id)
-                [life decayed ^Date last] (extant-memory-recall db uuid)
-                base (if last (decay/project half-life-days decayed last flush-ms) 0.0)]
-            {:memory/id              uuid
-             :memory/recall-lifetime (+ (long (or life 0)) (long n))
-             :memory/recall-decayed  (+ base (double n))
-             :memory/last-recalled   (Date. (long flush-ms))}))
+  (into []
+        (keep (fn [[id n]]
+                (let [uuid (UUID/fromString id)]
+                  (when-let [eid (memory-eid db uuid)]
+                    (let [[life decayed ^Date last] (extant-memory-recall db uuid)
+                          base (if last (decay/project half-life-days decayed last flush-ms) 0.0)]
+                      {:db/id                  eid
+                       :memory/recall-lifetime (+ (long (or life 0)) (long n))
+                       :memory/recall-decayed  (+ base (double n))
+                       :memory/last-recalled   (Date. (long flush-ms))})))))
         id-counts))
 
 ;; ---------- recall-count write strategies ----------

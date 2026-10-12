@@ -616,7 +616,8 @@
             plan (memory/plan-batch db "alice"
                                     {:create [{:content "c-a" :src "a" :tags [["domain" "clojure"]]}]
                                      :update [{:id x :content "new-x"}]}
-                                    create-tag-err update-tag-err)]
+                                    create-tag-err update-tag-err
+                                    [(java.util.UUID/randomUUID)])]
         (testing "the planner returns a plan with ids, tx-data, and an applied count"
           (is (true? (:ok? plan)))
           (is (== 1 (count (:ids plan))))
@@ -632,7 +633,8 @@
     (try
       (let [plan (memory/plan-batch (d/db conn) "alice"
                                     {:update [{:id (str (java.util.UUID/randomUUID)) :content "x"}]}
-                                    create-tag-err update-tag-err)]
+                                    create-tag-err update-tag-err
+                                    [])]
         (testing "a failing plan carries only the failing op and no tx-data"
           (is (false? (:ok? plan)))
           (is (= errors/not-found (:code (first (:errors plan)))))
@@ -1686,6 +1688,76 @@
         (memory/create! conn "alice" {:content "m2" :src "a"})
         (testing "a src a sibling keeps is not dead, so no repair"
           (is (empty? (plan {:deletes [{:eid em :src "a"}]})))))
+      (finally (d/close conn)))))
+
+;; ---------- write serialization (18c) ----------
+
+(deftest tx-function-read-is-atomic-no-lost-update
+  ;; the mechanism engram's writes lean on: a read-modify-write inside a
+  ;; :db.fn/call commits atomically, so concurrent increments lose nothing
+  (let [conn (fresh-conn)
+        eid-by-src (fn [] (d/q '[:find ?e . :in $ ?s :where [?e :memory/src ?s]] (d/db conn) "c"))]
+    (try
+      (memory/create! conn "alice" {:content "c" :src "c"})
+      (let [threads 8
+            per     50
+            inc!    (fn []
+                      (d/transact! conn
+                        [[:db.fn/call
+                          (fn [db]
+                            (let [e   (d/q '[:find ?e . :in $ ?s :where [?e :memory/src ?s]] db "c")
+                                  cur (:memory/recall-lifetime (d/pull db [:memory/recall-lifetime] e))]
+                              [{:db/id e :memory/recall-lifetime (inc (or cur 0))}]))]]))
+            fs (doall (repeatedly threads #(future (dotimes [_ per] (inc!)))))]
+        (doseq [f fs] @f)
+        (testing "concurrent read-modify-write through a transaction function loses no update"
+          (is (== (* threads per)
+                  (:memory/recall-lifetime (d/pull (d/db conn) [:memory/recall-lifetime] (eid-by-src)))))))
+      (finally (d/close conn)))))
+
+(deftest writes-racing-a-delete-leave-no-ghost
+  (let [conn   (fresh-conn)
+        ghost? (fn [] (seq (d/q '[:find [?e ...]
+                                  :where [?e :memory/last-confirmed _]
+                                         (not-join [?e] [?e :memory/user _])]
+                                (d/db conn))))]
+    (try
+      (dotimes [_ 60]
+        (let [id (memory/create! conn "alice" {:content "m" :src "s" :tags [["domain" "clojure"]]})
+              f1 (future (dotimes [_ 4] (memory/confirm! conn "alice" [id])))
+              f2 (future (dotimes [_ 4] (memory/update! conn "alice" id {:content "x"})))
+              f3 (future (memory/delete! conn "alice" id))]
+          @f1 @f2 @f3))
+      (testing "a confirm or an update racing a delete never resurrects a ghost memory"
+        (is (not (ghost?))))
+      (finally (d/close conn)))))
+
+(deftest concurrent-sibling-deletes-repair-the-referrer
+  (let [conn      (fresh-conn)
+        src-count (fn [src] (count (d/q '[:find [?e ...] :in $ ?u ?s
+                                          :where [?e :memory/user ?u] [?e :memory/src ?s]]
+                                        (d/db conn) "alice" src)))]
+    (try
+      (dotimes [_ 60]
+        (let [a1 (memory/create! conn "alice" {:content "a1" :src "a"})
+              a2 (memory/create! conn "alice" {:content "a2" :src "a"})
+              r  (memory/create! conn "alice" {:content "r" :src "r" :related ["a"]})
+              f1 (future (memory/delete! conn "alice" a1))
+              f2 (future (memory/delete! conn "alice" a2))]
+          @f1 @f2
+          (testing "both siblings gone, so the referrer keeps no dangling link to the src"
+            (is (zero? (src-count "a")))
+            (is (= #{} (related-set conn r))))
+          (memory/delete! conn "alice" r)))
+      (finally (d/close conn)))))
+
+(deftest mem-recall-flush-skips-a-deleted-memory
+  (let [conn (fresh-conn)]
+    (try
+      (let [id (memory/create! conn "alice" {:content "m" :src "s"})]
+        (memory/delete! conn "alice" id)
+        (testing "a recall-count flush for a gone memory plans nothing, so no ghost"
+          (is (empty? (stats/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis))))))
       (finally (d/close conn)))))
 
 (deftest confirm-stamps-owned-only

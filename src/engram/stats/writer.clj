@@ -27,8 +27,12 @@
     (assoc state :timer nil :first-ms nil)
     (try
       (let [flush-ms (System/currentTimeMillis)
-            tx       (stats/->writes (:strategy writer) pending-recalls (d/db (:conn writer)) flush-ms)]
-        (when (seq tx) (d/transact! (:conn writer) (vec tx)))
+            strategy (:strategy writer)]
+        ;; Run ->writes inside the transaction, so the read of the current counts
+        ;; is atomic with the commit. A concurrent delete then cannot be
+        ;; resurrected by a stamp the flush planned against a stale snapshot.
+        (d/transact! (:conn writer)
+                     [[:db.fn/call (fn [db] (stats/->writes strategy pending-recalls db flush-ms))]])
         (assoc state :pending-recalls {} :timer nil :first-ms nil))
       (catch Throwable e
         (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")

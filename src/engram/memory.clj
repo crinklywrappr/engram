@@ -55,31 +55,37 @@
       (seq tags)    (assoc :tags tags)
       (seq related) (assoc :related related))))
 
-(defn- tag-tx [[category label]] {:tag/category category :tag/label label})
+;; A component tag entity. It carries a unique tempid, so it transacts inside a
+;; `:db.fn/call` function, where a nested map without a tempid is rejected.
+(defn- tag-tx [[category label]]
+  {:db/id (str (gensym "tag")) :tag/category category :tag/label label})
 
 ;; ---------- writes ----------
 
 (defn- create-tx
-  "Return [uuid tx-map] for one create payload owned by `user`. The single build
-  path for a new memory entity."
-  [user {:keys [content src tags related]}]
-  (let [id  (UUID/randomUUID)
-        now (Date.)]
-    [id (cond-> {:memory/id id
-                 :memory/user user
-                 :memory/content content
-                 :memory/src src
-                 :memory/created-at now
-                 :memory/updated-at now
-                 :memory/last-confirmed now}
-          (seq tags)    (assoc :memory/tag (mapv tag-tx tags))
-          (seq related) (assoc :memory/related (vec related)))]))
+  "Return the tx-map for one create payload owned by `user`, carrying the caller's
+  minted `id`. The id string doubles as the `:db/id` tempid, so the map transacts
+  both in a plain transaction and inside a transaction function, where a bare map
+  without a tempid is rejected. The single build path for a new memory entity."
+  [user id {:keys [content src tags related]}]
+  (let [now (Date.)]
+    (cond-> {:db/id (str id)
+             :memory/id id
+             :memory/user user
+             :memory/content content
+             :memory/src src
+             :memory/created-at now
+             :memory/updated-at now
+             :memory/last-confirmed now}
+      (seq tags)    (assoc :memory/tag (mapv tag-tx tags))
+      (seq related) (assoc :memory/related (vec related)))))
 
 (defn create!
-  "Create one atomic fact for `user`. Returns the new id as a string."
+  "Create one atomic fact for `user`. Returns the new id as a string. A create
+  reads nothing before it writes, so a plain transaction is already atomic."
   [conn user payload]
-  (let [[id mem] (create-tx user payload)]
-    (d/transact! conn [mem])
+  (let [id (UUID/randomUUID)]
+    (d/transact! conn [(create-tx user id payload)])
     (str id)))
 
 (defn- eid-of [db user id-str]
@@ -242,50 +248,74 @@
              (remove skip-self)
              (mapcat replace-fn))))))
 
+;; The planning for a read-dependent write runs inside a `:db.fn/call` transaction
+;; function, so the read and the commit are one atomic unit under the connection
+;; write lock. The function sees the committed db at commit time, so a concurrent
+;; write cannot stale the plan. A missing memory throws `::absent`, which the
+;; caller maps back to nil, because the function can return only tx-data.
+
+(defn- absent! [] (throw (ex-info "no such memory for this user" {::absent true})))
+
+(defn- commit-plan!
+  "Transact the tx-data `plan-fn` builds from the commit-time db, as one atomic
+  unit. Return `id`, or nil when `plan-fn` throws `::absent`."
+  [conn id plan-fn]
+  (try
+    (d/transact! conn [[:db.fn/call plan-fn]])
+    id
+    (catch clojure.lang.ExceptionInfo e
+      (if (::absent (ex-data e)) nil (throw e)))))
+
 (defn update!
   "Correct a fact in place. Replaces content, src, tags, and related when
   supplied. A src change repairs the related space in the same transaction, so no
   other memory is left pointing at a src that no longer has a memory. An empty
   payload is a bare confirm: it stamps last-confirmed alone and leaves updated-at,
-  the same effect as the confirm route. Returns the id string, or nil when the
-  memory does not exist for this user."
+  the same effect as the confirm route. The plan and the commit run as one atomic
+  unit, so a concurrent delete cannot resurrect the memory. Returns the id string,
+  or nil when the memory does not exist for this user."
   [conn user id payload]
-  (let [db  (d/db conn)
-        eid (eid-of db user id)]
-    (when eid
-      (let [fields (->fields payload)
-            tx     (into (vec (update-tx db eid fields))
-                         (plan-repair-for-update db user eid fields))]
-        (d/transact! conn tx)
-        id))))
+  (let [fields (->fields payload)]
+    (commit-plan! conn id
+                  (fn [db]
+                    (if-let [eid (eid-of db user id)]
+                      (into (vec (update-tx db eid fields))
+                            (plan-repair-for-update db user eid fields))
+                      (absent!))))))
 
 (defn delete!
   "Delete `user`'s own memory. Retracting the entity also retracts its component
   tags. The delete repairs the related space in the same transaction, so no other
-  memory is left pointing at a src the delete emptied. Returns the id string, or
-  nil when the memory does not exist for this user."
+  memory is left pointing at a src the delete emptied. The plan and the commit run
+  as one atomic unit, so a concurrent write cannot stale the repair. Returns the
+  id string, or nil when the memory does not exist for this user."
   [conn user id]
-  (let [db  (d/db conn)
-        eid (eid-of db user id)]
-    (when eid
-      (let [tx (into [[:db/retractEntity eid]]
-                     (plan-repair-for-delete db user eid (src-of db eid)))]
-        (d/transact! conn tx)
-        id))))
+  (commit-plan! conn id
+                (fn [db]
+                  (if-let [eid (eid-of db user id)]
+                    (into [[:db/retractEntity eid]]
+                          (plan-repair-for-delete db user eid (src-of db eid)))
+                    (absent!)))))
 
 (defn confirm!
   "Stamp last-confirmed to now for each of `ids` the caller owns, in one
   transaction. Drop an id the caller does not own and an id that does not exist.
   Collapse a repeated id to one stamp. Return the number of memories stamped.
   Never touch updated-at, because a confirm affirms the fact without editing it.
-  `ids` are uuid strings."
+  The resolve and the stamp run as one atomic unit, so a delete that empties an id
+  at commit time drops it rather than resurrecting a ghost. The stamped count
+  comes from the transaction report. `ids` are uuid strings."
   [conn user ids]
-  (let [db   (d/db conn)
-        now  (Date.)
-        eids (distinct (keep #(eid-of db user %) ids))
-        tx   (mapv (fn [eid] {:db/id eid :memory/last-confirmed now}) eids)]
-    (when (seq tx) (d/transact! conn tx))
-    (count eids)))
+  (let [report (d/transact!
+                conn
+                [[:db.fn/call
+                  (fn [db]
+                    (let [now (Date.)]
+                      (mapv (fn [eid] {:db/id eid :memory/last-confirmed now})
+                            (distinct (keep #(eid-of db user %) ids)))))]])]
+    (count (into #{}
+                 (comp (filter #(= :memory/last-confirmed (:a %))) (map :e))
+                 (:tx-data report)))))
 
 ;; ---------- batch ----------
 
@@ -312,8 +342,10 @@
   tie) and a repeated delete id is deduplicated. If all pass, return
   {:ok? true :ids [create-ids...] :tx-data [...] :applied n}; else return
   {:ok? false :errors [{:op :i :code ...} ...]} for the failing ops only. The
-  index :i is 0-based within the op's own group list."
-  [db user batch create-tag-error update-tag-error]
+  index :i is 0-based within the op's own group list. `create-ids` are the minted
+  uuids for the creates, one per create in order, so the caller knows the ids
+  without the transaction report."
+  [db user batch create-tag-error update-tag-error create-ids]
   (let [creates (vec (:create batch))
         updates (vec (:update batch))
         deletes (vec (:delete batch))
@@ -349,9 +381,8 @@
                             (keep :error delete-results)))]
     (if (seq errors)
       {:ok? false :errors errors}
-      (let [pairs          (mapv #(create-tx user %) creates)
-            ids            (mapv (comp str first) pairs)
-            create-tx-data (map second pairs)
+      (let [create-tx-data (mapv (fn [id p] (create-tx user id p)) create-ids creates)
+            ids            (mapv str create-ids)
             fold           (reduce
                             (fn [m {:keys [eid payload]}]
                               (update m eid merge-update-fields payload))
@@ -366,16 +397,36 @@
          :applied (+ (count ids) (count fold) (count delete-eids))}))))
 
 (defn apply-batch!
-  "Apply a grouped batch for one user in one atomic transaction. Delegate the
-  validation and tx-data planning to `plan-batch` over the current db value, then
-  transact once on success. Return {:ok? true :ids [...] :applied n} on success,
-  or {:ok? false :errors [...]} on failure, writing nothing on failure."
+  "Apply a grouped batch for one user in one atomic transaction. The planning runs
+  inside a `:db.fn/call` function over the commit-time db, so the validation, the
+  tx-data, and the related repair all read the store atomically with the commit,
+  and no concurrent write stales them. The create ids are minted here, so the
+  caller knows them without the report, and the applied count comes from the
+  request. A rejected batch throws its full error vector from inside the function,
+  which aborts the transaction and leaves the store untouched. Return
+  {:ok? true :ids [...] :applied n} on success, or {:ok? false :errors [...]} on
+  failure."
   [conn user batch create-tag-error update-tag-error]
-  (let [result (plan-batch (d/db conn) user batch create-tag-error update-tag-error)]
-    (if (:ok? result)
-      (do (when (seq (:tx-data result)) (d/transact! conn (:tx-data result)))
-          {:ok? true :ids (:ids result) :applied (:applied result)})
-      result)))
+  (let [creates    (vec (:create batch))
+        create-ids (mapv (fn [_] (UUID/randomUUID)) creates)
+        upd-ids    (distinct (map :id (:update batch)))
+        del-ids    (distinct (:delete batch))]
+    (try
+      (d/transact!
+       conn
+       [[:db.fn/call
+         (fn [db]
+           (let [result (plan-batch db user batch create-tag-error update-tag-error create-ids)]
+             (if (:ok? result)
+               (:tx-data result)
+               (throw (ex-info "batch rejected" {::errors (:errors result)})))))]])
+      {:ok? true
+       :ids (mapv str create-ids)
+       :applied (+ (count creates) (count upd-ids) (count del-ids))}
+      (catch clojure.lang.ExceptionInfo e
+        (if-let [errs (::errors (ex-data e))]
+          {:ok? false :errors errs}
+          (throw e))))))
 
 ;; ---------- fetch one ----------
 
