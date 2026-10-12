@@ -504,6 +504,27 @@
                                       (into {} (map (fn [p] [p 1])) pairs)
                                       (System/currentTimeMillis))))
 
+(deftest recalls-excludes-a-pair-no-live-memory-carries
+  (let [conn (fresh-conn)
+        lists? (fn [cat lab]
+                 (boolean (some #(= [cat lab] [(:category %) (:label %)])
+                                (stats/catalog conn "alice" 14))))]
+    (try
+      (let [m (memory/create! conn "alice" {:content "m" :src "s" :tags [["domain" "clojure"]]})]
+        (seed-recall! conn "alice" 14 [["domain" "clojure"]])
+        (testing "while a live memory carries the pair, the catalog lists it"
+          (is (lists? "domain" "clojure")))
+        (memory/delete! conn "alice" m)
+        (testing "after the last memory with the pair is deleted, the catalog drops it"
+          (is (not (lists? "domain" "clojure")))))
+      (let [m2 (memory/create! conn "alice" {:content "m2" :src "s2" :tags [["domain" "clojure"]]})]
+        (seed-recall! conn "alice" 14 [["domain" "clojure"]])
+        (memory/update! conn "alice" m2 {:tags [["domain" "datalevin"]]})
+        (testing "after the last use of a pair is retagged away, the catalog drops it"
+          (is (not (lists? "domain" "clojure")))
+          (is (lists? "domain" "datalevin"))))
+      (finally (d/close conn)))))
+
 (deftest batch-all-pass
   (let [conn (fresh-conn)]
     (try
