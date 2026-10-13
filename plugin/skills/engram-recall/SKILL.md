@@ -62,6 +62,56 @@ When the admin describes the categories, the body also carries a `categories`
 map. Each entry gives one category a `description` and a vector of `examples`.
 Read them to pick labels that match how the admin means each category.
 
+## Short-term memory
+
+A short-term memory is a loose task note, not an atomic fact. It holds one
+passing thought during a task. It lives apart from a long-term memory, and it
+never joins a recall. A thought-process is the bucket that holds these notes for
+one task. You name a thought-process in lowercase kebab-case. A good name
+describes the project and the task.
+
+### Session start: list the buckets
+
+Run `ssh engram POST /memories/short-term/search < /dev/null` one time at session
+start. The empty body and the missing `thought_process` list the buckets. The
+body comes back as `{"thought-processes": {"<name>": <count>}}`, one entry per
+bucket with its note count. Show the buckets to the user. Resume the current
+task's bucket by its name. When you continue another session's task, adopt its
+bucket by its name.
+
+### During work: stage notes
+
+Stage a passing thought as a short-term memory under the task's thought-process.
+One note holds one thought. Create a note:
+
+```bash
+echo '{"thought-process":"engram-decompress","text":"the wipe waits on a 200"}' | ssh engram POST /memories/short-term
+```
+
+The server assigns the id and returns it. Read, change, and remove a note by id:
+
+```bash
+ssh engram GET /memories/short-term/<id> < /dev/null
+echo '{"text":"the corrected thought"}' | ssh engram PUT /memories/short-term/<id>
+ssh engram DELETE /memories/short-term/<id> < /dev/null
+```
+
+Search within a bucket:
+
+```bash
+echo '{"search":"wipe"}' | ssh engram POST '/memories/short-term/search?thought_process=engram-decompress'
+```
+
+An empty body with a `thought_process` streams the whole bucket as NDJSON, oldest
+first. A non-empty body streams only the full-text matches. Each note line
+carries `id`, `thought-process`, `text`, `created-at`, and `updated-at`.
+
+### End of task: decompress
+
+The user runs `/decompress` to close out the task's thought-process. It promotes
+the worthwhile notes to long-term facts, archives the whole bucket, and wipes it.
+When a task ends, suggest `/decompress` to the user.
+
 ## Recall: load memories plus their links
 
 A recall loads the memories you select plus every memory linked to them through
