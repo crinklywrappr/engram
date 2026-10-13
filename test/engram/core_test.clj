@@ -10,6 +10,7 @@
             [engram.memory :as memory]
             [engram.migrations :as migrations]
             [engram.search-config :as search-config]
+            [engram.short-term :as short-term]
             [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
             [engram.system :as system]
@@ -1987,4 +1988,166 @@
           (is (not (some #{"fresh" "secret"} (set srcs))))))
       (testing "a request without the user header is rejected"
         (is (== 401 (:status (request app :get "/memories/stale" {:accept "application/x-ndjson"})))))
+      (finally (d/close conn)))))
+
+;; ---------- short-term memories (ticket 19) ----------
+
+(defn- st-insert!
+  "Transact one short-term note directly with an explicit created time, so an
+  ordering test controls the timestamps rather than racing the wall clock."
+  [conn user process text ^java.util.Date created]
+  (d/transact! conn [{:short-term/id         (java.util.UUID/randomUUID)
+                      :short-term/user       user
+                      :short-term/process    process
+                      :short-term/text       text
+                      :short-term/created-at created
+                      :short-term/updated-at created}]))
+
+(deftest short-term-crud
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (testing "a create returns 201 and a server-assigned id"
+        (let [resp (request app :post "/memories/short-term"
+                            {:user "alice" :body {:thought-process "task-a" :text "first note"}})]
+          (is (== 201 (:status resp)))
+          (is (string? (:id (body-json resp))))))
+      (testing "a non-kebab thought-process and an empty text are 400"
+        (is (== 400 (:status (request app :post "/memories/short-term"
+                                      {:user "alice" :body {:thought-process "Bad_Name" :text "x"}}))))
+        (is (== 400 (:status (request app :post "/memories/short-term"
+                                      {:user "alice" :body {:thought-process "task-a" :text ""}})))))
+      (testing "a read returns the note, and a stranger cannot read it"
+        (let [id  (:id (body-json (request app :post "/memories/short-term"
+                                           {:user "alice" :body {:thought-process "task-a" :text "readable"}})))
+              got (body-json (request app :get (str "/memories/short-term/" id) {:user "alice"}))]
+          (is (= "readable" (:text got)))
+          (is (= "task-a" (:thought-process got)))
+          (is (string? (:created-at got)))
+          (is (string? (:updated-at got)))
+          (is (== 404 (:status (request app :get (str "/memories/short-term/" id) {:user "bob"}))))))
+      (testing "an update replaces the text and stamps updated-at, leaving created-at"
+        (let [id     (:id (body-json (request app :post "/memories/short-term"
+                                              {:user "alice" :body {:thought-process "task-a" :text "before"}})))
+              before (body-json (request app :get (str "/memories/short-term/" id) {:user "alice"}))
+              _      (is (== 200 (:status (request app :put (str "/memories/short-term/" id)
+                                                   {:user "alice" :body {:text "after"}}))))
+              after  (body-json (request app :get (str "/memories/short-term/" id) {:user "alice"}))]
+          (is (= "after" (:text after)))
+          (is (= (:created-at before) (:created-at after)))
+          (is (not (neg? (compare (:updated-at after) (:created-at after)))))))
+      (testing "an update on a stranger's note is 404"
+        (let [id (:id (body-json (request app :post "/memories/short-term"
+                                          {:user "alice" :body {:thought-process "task-a" :text "mine"}})))]
+          (is (== 404 (:status (request app :put (str "/memories/short-term/" id)
+                                        {:user "bob" :body {:text "theirs"}}))))))
+      (testing "a delete removes the note, and a second delete is 404"
+        (let [id (:id (body-json (request app :post "/memories/short-term"
+                                          {:user "alice" :body {:thought-process "task-a" :text "doomed"}})))]
+          (is (= {:deleted id} (body-json (request app :delete (str "/memories/short-term/" id) {:user "alice"}))))
+          (is (== 404 (:status (request app :delete (str "/memories/short-term/" id) {:user "alice"}))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-ordering
+  (let [conn (fresh-conn)]
+    (try
+      (let [t (fn [ms] (java.util.Date. (long ms)))]
+        (st-insert! conn "alice" "task-a" "middle" (t 2000))
+        (st-insert! conn "alice" "task-a" "oldest" (t 1000))
+        (st-insert! conn "alice" "task-a" "newest" (t 3000))
+        (testing "a bucket streams oldest first"
+          (is (= ["oldest" "middle" "newest"]
+                 (mapv :text (short-term/stream-bucket conn "alice" "task-a"))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-search-aggregate
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "write the datalevin migration"}})
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "review the pull request"}})
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-b" :text "buy some milk"}})
+      (request app :post "/memories/short-term" {:user "bob"   :body {:thought-process "task-a" :text "secret migration note"}})
+      (testing "an empty body returns each bucket with its note count, scoped to the caller"
+        (is (= {:thought-processes {:task-a 2 :task-b 1}}
+               (body-json (request app :post "/memories/short-term/search" {:user "alice"})))))
+      (testing "a non-empty body adds the number of matching notes"
+        (is (= {:thought-processes {:task-a 2 :task-b 1} :matches 1}
+               (body-json (request app :post "/memories/short-term/search"
+                                   {:user "alice" :body {:search "migration"}})))))
+      (testing "a blank or non-string search is 400"
+        (is (== 400 (:status (request app :post "/memories/short-term/search"
+                                      {:user "alice" :body {:search "   "}}))))
+        (is (== 400 (:status (request app :post "/memories/short-term/search"
+                                      {:user "alice" :body {:search 5}})))))
+      (finally (d/close conn)))))
+
+(deftest short-term-search-stream
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "write the datalevin migration"}})
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "review the pull request"}})
+      (request app :post "/memories/short-term" {:user "bob"   :body {:thought-process "task-a" :text "secret migration note"}})
+      (testing "a thought-process with an empty body streams the whole bucket as NDJSON"
+        (let [resp  (request app :post "/memories/short-term/search"
+                            {:user "alice" :query "thought_process=task-a"})
+              lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+              hdr   (json/read-value (first lines) json/keyword-keys-object-mapper)
+              notes (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))]
+          (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"])))
+          (is (true? (:header hdr)))
+          (is (= "task-a" (:thought-process hdr)))
+          (is (= 2 (count notes)))))
+      (testing "a thought-process with a search term streams only the matches, header carrying the term"
+        (let [resp  (request app :post "/memories/short-term/search"
+                            {:user "alice" :query "thought_process=task-a" :body {:search "migration"}})
+              lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+              hdr   (json/read-value (first lines) json/keyword-keys-object-mapper)
+              notes (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))]
+          (is (= "migration" (:search hdr)))
+          (is (= ["write the datalevin migration"] (mapv :text notes)))))
+      (finally (d/close conn)))))
+
+(deftest short-term-wipe
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "one"}})
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-a" :text "two"}})
+      (request app :post "/memories/short-term" {:user "alice" :body {:thought-process "task-b" :text "keep"}})
+      (request app :post "/memories/short-term" {:user "bob"   :body {:thought-process "task-a" :text "bob keeps this"}})
+      (testing "a wipe deletes the whole bucket and reports the count"
+        (is (= {:deleted 2} (body-json (request app :delete "/memories/short-term"
+                                                {:user "alice" :query "thought_process=task-a"})))))
+      (testing "the wiped bucket is gone, the caller's other bucket stays, and the stranger's bucket is untouched"
+        (is (= {:thought-processes {:task-b 1}}
+               (body-json (request app :post "/memories/short-term/search" {:user "alice"}))))
+        (is (= {:thought-processes {:task-a 1}}
+               (body-json (request app :post "/memories/short-term/search" {:user "bob"})))))
+      (testing "wiping an empty bucket reports zero"
+        (is (= {:deleted 0} (body-json (request app :delete "/memories/short-term"
+                                                {:user "alice" :query "thought_process=gone"})))))
+      (testing "a wipe without a thought_process is 400"
+        (is (== 400 (:status (request app :delete "/memories/short-term" {:user "alice"})))))
+      (finally (d/close conn)))))
+
+(deftest short-term-isolated-from-memories-and-search
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [mid (memory/create! conn "alice" {:content "pipeline deploy fact" :src "s"
+                                              :tags [["domain" "clojure"]]})
+            sid (:id (body-json (request app :post "/memories/short-term"
+                                         {:user "alice" :body {:thought-process "task-a" :text "pipeline task note"}})))]
+        (testing "a short-term note never appears in GET /memories"
+          (let [lines (->> (slurp (:body (request app :get "/memories"
+                                                  {:user "alice" :accept "application/x-ndjson"})))
+                           str/split-lines (remove str/blank?))
+                mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))
+                ids   (set (map :id mems))]
+            (is (contains? ids mid))
+            (is (not (contains? ids sid)))))
+        (testing "a short-term full-text search never matches a Memory's content"
+          (is (= 1 (short-term/match-count conn "alice" "pipeline")))))
       (finally (d/close conn)))))

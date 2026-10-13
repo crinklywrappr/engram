@@ -1,0 +1,16 @@
+;; Short-term memory entity. A loose task note a user stages during one task,
+;; held under a thought-process. Separate from the Memory entity. It carries an
+;; id, the owning user, the thought-process, free text, a created time, and an
+;; updated time. :short-term/text is full-text indexed so a lightweight search
+;; can match a note by its words. Adding a full-text attribute drifts the boot
+;; search config, so the first boot after this migration re-indexes once. A
+;; short-term memory never joins recall, stats, freshness, conformance, link
+;; density, or consolidate.
+;;
+;; syncopate additive creation migration: :down is auto-derived.
+{:up {:schema/create {:short-term/id         {:db/valueType :db.type/uuid    :db/unique :db.unique/identity}
+                      :short-term/user       {:db/valueType :db.type/string}
+                      :short-term/process    {:db/valueType :db.type/string}
+                      :short-term/text       {:db/valueType :db.type/string  :db/fulltext true}
+                      :short-term/created-at {:db/valueType :db.type/instant}
+                      :short-term/updated-at {:db/valueType :db.type/instant}}}}

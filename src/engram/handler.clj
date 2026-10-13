@@ -17,6 +17,7 @@
             [engram.memory :as memory]
             [engram.middleware :as mw]
             [engram.schema :as schema]
+            [engram.short-term :as short-term]
             [engram.stats :as stats]
             [engram.stats.writer :as stat-writer]
             [jsonista.core :as json]
@@ -225,6 +226,67 @@
                  :data {:user user :failed (count entries)}} "batch rejected")
         {:status 422 :body {:errors entries}}))))
 
+;; ---------- short-term memory handlers ----------
+
+(defn- short-term-create-handler [conn req]
+  (let [user (:engram/user req)
+        {:keys [thought-process text]} (get-in req [:parameters :body])]
+    {:status 201 :body {:id (short-term/create! conn user thought-process text)}}))
+
+(defn- short-term-fetch-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:parameters :path :id])]
+    (if-let [m (short-term/fetch conn user id)]
+      {:status 200 :body m}
+      {:status 404 :body {:error "not found"}})))
+
+(defn- short-term-update-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:parameters :path :id])
+        text (get-in req [:parameters :body :text])]
+    (if (short-term/update! conn user id text)
+      {:status 200 :body {:id id}}
+      {:status 404 :body {:error "not found"}})))
+
+(defn- short-term-delete-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:parameters :path :id])]
+    (if (short-term/delete! conn user id)
+      {:status 200 :body {:deleted id}}
+      {:status 404 :body {:error "not found"}})))
+
+(defn- short-term-wipe-handler [conn req]
+  (let [user    (:engram/user req)
+        process (get-in req [:parameters :query :thought_process])]
+    (if process
+      {:status 200 :body {:deleted (short-term/wipe! conn user process)}}
+      {:status 400 :body {:error "thought_process is required"}})))
+
+(defn- short-term-search-handler
+  "Without a thought-process, aggregate across buckets as JSON: the per-bucket
+  counts, plus the number of matching notes when the body carries a search term.
+  With a thought-process, stream that bucket's notes as NDJSON: every note when
+  the body is empty, only the full-text matches when it carries a term. The search
+  term lives in the raw body, so an absent body reads as nil. A present blank term
+  is a 400."
+  [conn req]
+  (let [user    (:engram/user req)
+        process (get-in req [:parameters :query :thought_process])
+        raw     (get-in req [:body-params :search])]
+    ;; A present search must be a non-blank string. `or` short-circuits, so
+    ;; str/blank? never sees a non-string value.
+    (if (and (some? raw) (or (not (string? raw)) (str/blank? raw)))
+      {:status 400 :body {:error "search must not be blank"}}
+      (let [term (when (some? raw) raw)]
+        (cond
+          (and process term) (ndjson-response {:header true :thought-process process :search term}
+                                              (short-term/stream-matches conn user process term))
+          process            (ndjson-response {:header true :thought-process process}
+                                              (short-term/stream-bucket conn user process))
+          term               {:status 200 :body {:thought-processes (short-term/buckets conn user)
+                                                 :matches (short-term/match-count conn user term)}}
+          :else              {:status 200 :body {:thought-processes (short-term/buckets conn user)}})))))
+
 (defn- routes
   "The reitit route table, closing over the db conn, the loaded config, and the
   two stat-write consumers: the tag writer for pair counts and the memory writer
@@ -278,6 +340,28 @@
     ["/memories/search" {:post {:parameters {:body schema/SearchBody}
                                 :responses  {200 {:body schema/SearchOut} 400 {:body schema/ErrorOut}}
                                 :handler (fn [req] (search-handler conn req))}}]
+    ;; Short-term memories live under /memories/short-term. The collection and the
+    ;; /search child are static, so they resolve ahead of /memories/:id, and the
+    ;; /memories/short-term/:id child sits a segment deeper, so it never collides
+    ;; with /memories/:id. The search POST mixes a JSON body and an NDJSON stream,
+    ;; so it declares no :responses.
+    ["/memories/short-term" {:post   {:parameters {:body schema/ShortTermCreateBody}
+                                      :responses  {201 {:body schema/IdOut}}
+                                      :handler (fn [req] (short-term-create-handler conn req))}
+                             :delete {:parameters {:query [:map [:thought_process {:optional true} config/Token]]}
+                                      :responses  {200 {:body schema/ShortTermWipedOut} 400 {:body schema/ErrorOut}}
+                                      :handler (fn [req] (short-term-wipe-handler conn req))}}]
+    ["/memories/short-term/search" {:post {:parameters {:query [:map [:thought_process {:optional true} config/Token]]}
+                                           :handler (fn [req] (short-term-search-handler conn req))}}]
+    ["/memories/short-term/:id" {:get    {:parameters {:path [:map [:id schema/IdStr]]}
+                                          :responses  {200 {:body schema/ShortTermOut} 404 {:body schema/ErrorOut}}
+                                          :handler (fn [req] (short-term-fetch-handler conn req))}
+                                 :put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/ShortTermUpdateBody}
+                                          :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut}}
+                                          :handler (fn [req] (short-term-update-handler conn req))}
+                                 :delete {:parameters {:path [:map [:id schema/IdStr]]}
+                                          :responses  {200 {:body schema/DeletedOut} 404 {:body schema/ErrorOut}}
+                                          :handler (fn [req] (short-term-delete-handler conn req))}}]
     ["/memories/:id"   {:get    {:parameters {:path [:map [:id schema/IdStr]]}
                                  :responses  {200 {:body schema/MemoryOut} 404 {:body schema/ErrorOut}}
                                  :handler (fn [req] (fetch-handler conn cfg req))}

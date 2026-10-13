@@ -61,6 +61,18 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
+;; /memories/short-term create. A note under a thought-process. The
+;; thought-process is a kebab-case Token, so a non-kebab value coerces to 400.
+;; The text is non-empty, so an empty text coerces to 400.
+(def ShortTermCreateBody
+  [:map
+   [:thought-process config/Token]
+   [:text [:string {:min 1}]]])
+
+;; /memories/short-term/:id update. A PUT replaces the note's text only.
+(def ShortTermUpdateBody
+  [:map [:text [:string {:min 1}]]])
+
 ;; The batch body: a map of grouped operations, each key optional. Order carries
 ;; no meaning across groups (see docs/adr/0002-batch-request-grouped-map.md). A
 ;; wrong-typed group is a malformed request -> 400 at coercion.
@@ -139,6 +151,13 @@
 (def SearchOut [:map [:results [:vector SearchRow]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
+;; A short-term note on the wire: kebab-case keys and ISO-8601 timestamps.
+(def ShortTermOut
+  [:map
+   [:id :string] [:thought-process :string] [:text :string]
+   [:created-at :string] [:updated-at :string]])
+;; A bucket wipe echoes the number of notes it deleted, which can be 0.
+(def ShortTermWipedOut [:map [:deleted :int]])
 ;; /memories/confirm echoes the number of the caller's memories it stamped.
 (def ConfirmOut [:map [:confirmed :int]])
 (def ErrorOut   [:map [:error :string]])
