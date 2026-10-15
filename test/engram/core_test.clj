@@ -12,7 +12,8 @@
             [engram.search-config :as search-config]
             [engram.short-term :as short-term]
             [engram.stats :as stats]
-            [engram.stats.writer :as stat-writer]
+            [engram.recall-count :as recall-count]
+            [engram.recall-count.writer :as rc-writer]
             [engram.system :as system]
             [jsonista.core :as json]
             [malli.core :as m]
@@ -38,8 +39,8 @@
   recorded count builds its own writer and drains it."
   ([conn] (test-app conn cfg))
   ([conn c] (handler/app conn c
-                         (stat-writer/writer conn (stats/->TagRecallCount (:recall-half-life-days c)))
-                         (stat-writer/writer conn (stats/->MemoryRecallCount (:recall-half-life-days c))))))
+                         (rc-writer/writer conn (recall-count/->TagRecallCount (:recall-half-life-days c)))
+                         (rc-writer/writer conn (recall-count/->MemoryRecallCount (:recall-half-life-days c))))))
 
 (defn- mem-counts
   "The caller's per-memory recall counts, keyed by src. Only a memory that
@@ -501,7 +502,7 @@
   "Synchronously record one recall of each pair, for test setup. Writes through
   plan-recalls at a count of one, the same tx a single recall produces."
   [conn user half-life pairs]
-  (d/transact! conn (stats/plan-recalls (d/db conn) user half-life
+  (d/transact! conn (recall-count/plan-recalls (d/db conn) user half-life
                                       (into {} (map (fn [p] [p 1])) pairs)
                                       (System/currentTimeMillis))))
 
@@ -509,7 +510,7 @@
   (let [conn (fresh-conn)
         lists? (fn [cat lab]
                  (boolean (some #(= [cat lab] [(:category %) (:label %)])
-                                (stats/catalog conn "alice" 14))))]
+                                (recall-count/catalog conn "alice" 14))))]
     (try
       (let [m (memory/create! conn "alice" {:content "m" :src "s" :tags [["domain" "clojure"]]})]
         (seed-recall! conn "alice" 14 [["domain" "clojure"]])
@@ -676,12 +677,12 @@
 
 ;; ---------- stats ----------
 
-(deftest stats-lifetime-and-recent
+(deftest recall-count-lifetime-and-recent
   (let [conn (fresh-conn)]
     (try
       (seed-recall! conn "alice" 14 [["domain" "clojure"]])
       (seed-recall! conn "alice" 14 [["domain" "clojure"]])
-      (let [row (first (stats/recalls conn "alice" 14))]
+      (let [row (first (recall-count/all-recall-rows conn "alice" 14))]
         (testing "lifetime counts every recall"
           (is (= 2 (:lifetime row))))
         (testing "recent decay count is positive and bounded by lifetime"
@@ -689,50 +690,50 @@
           (is (<= (:recent row) 2.0))))
       (finally (d/close conn)))))
 
-(deftest stat-writer-serializes-and-drains
+(deftest recall-writer-serializes-and-drains
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn (stats/->TagRecallCount 14))]
+        w    (rc-writer/writer conn (recall-count/->TagRecallCount 14))]
     (try
       ;; 10 threads each record the same pair 5 times, concurrently
       (let [fs (doall (repeatedly 10 #(future (dotimes [_ 5]
-                                                (stat-writer/record-pairs! w "alice" [["domain" "clojure"]])))))]
+                                                (rc-writer/record-pairs! w "alice" [["domain" "clojure"]])))))]
         (run! deref fs))
-      (stat-writer/drain! w)
+      (rc-writer/drain! w)
       (testing "every concurrent increment lands, none lost to a race"
-        (is (== 50 (:lifetime (first (stats/recalls conn "alice" 14))))))
+        (is (== 50 (:lifetime (first (recall-count/all-recall-rows conn "alice" 14))))))
       (finally (d/close conn)))))
 
-(deftest stat-write-failure-is-isolated
+(deftest recall-write-failure-is-isolated
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn (stats/->TagRecallCount 14))]
+        w    (rc-writer/writer conn (recall-count/->TagRecallCount 14))]
     (d/close conn)                                   ; every flush now fails
     (testing "recording never throws to the caller when the write fails"
-      (is (nil? (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]))))
+      (is (nil? (rc-writer/record-pairs! w "alice" [["domain" "clojure"]]))))
     (testing "draining a failing writer does not throw"
-      (is (nil? (stat-writer/drain! w))))))
+      (is (nil? (rc-writer/drain! w))))))
 
-(deftest stat-flush-is-debounced-and-coalesces
+(deftest recall-flush-is-debounced-and-coalesces
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn (stats/->TagRecallCount 14) :debounce-ms 80 :max-wait-ms 1000)]
+        w    (rc-writer/writer conn (recall-count/->TagRecallCount 14) :debounce-ms 80 :max-wait-ms 1000)]
     (try
-      (dotimes [_ 5] (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]))
+      (dotimes [_ 5] (rc-writer/record-pairs! w "alice" [["domain" "clojure"]]))
       (testing "the flush is deferred, so no write has happened yet"
         (Thread/sleep 20)
-        (is (empty? (stats/recalls conn "alice" 14))))
+        (is (empty? (recall-count/all-recall-rows conn "alice" 14))))
       (testing "after the debounce elapses the burst coalesces into the summed count"
         (Thread/sleep 250)
-        (is (== 5 (:lifetime (first (stats/recalls conn "alice" 14))))))
-      (finally (stat-writer/drain! w) (d/close conn)))))
+        (is (== 5 (:lifetime (first (recall-count/all-recall-rows conn "alice" 14))))))
+      (finally (rc-writer/drain! w) (d/close conn)))))
 
-(deftest stat-flush-max-wait-caps-postponement
+(deftest recall-flush-max-wait-caps-postponement
   (let [conn (fresh-conn)
-        w    (stat-writer/writer conn (stats/->TagRecallCount 14) :debounce-ms 5000 :max-wait-ms 100)]
+        w    (rc-writer/writer conn (recall-count/->TagRecallCount 14) :debounce-ms 5000 :max-wait-ms 100)]
     (try
       ;; keep rescheduling faster than the debounce; the max wait must still flush
-      (dotimes [_ 8] (stat-writer/record-pairs! w "alice" [["domain" "clojure"]]) (Thread/sleep 30))
+      (dotimes [_ 8] (rc-writer/record-pairs! w "alice" [["domain" "clojure"]]) (Thread/sleep 30))
       (testing "the maximum wait flushes even though the debounce never elapses"
-        (is (pos? (:lifetime (first (stats/recalls conn "alice" 14))))))
-      (finally (stat-writer/drain! w) (d/close conn)))))
+        (is (pos? (:lifetime (first (recall-count/all-recall-rows conn "alice" 14))))))
+      (finally (rc-writer/drain! w) (d/close conn)))))
 
 (deftest plan-recalls-pure-and-coalesced
   (let [conn (fresh-conn)]
@@ -740,29 +741,29 @@
       (seed-recall! conn "alice" 14 [["domain" "clojure"]])   ; seed one row
       (let [db (d/db conn)]
         (testing "a coalesced count adds to the prior lifetime and decayed weight"
-          (let [tx (stats/plan-recalls db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
+          (let [tx (recall-count/plan-recalls db "alice" 14 {["domain" "clojure"] 3} (System/currentTimeMillis))]
             (is (== 1 (count tx)))
-            (is (== 4 (:stat/lifetime (first tx))))
-            (is (< 3.0 (:stat/decayed (first tx)) 4.001))))
+            (is (== 4 (:recall/lifetime (first tx))))
+            (is (< 3.0 (:recall/decayed (first tx)) 4.001))))
         (testing "a pair with no prior row starts at the count"
-          (let [tx (stats/plan-recalls db "bob" 14 {["domain" "clojure"] 2} (System/currentTimeMillis))]
-            (is (== 2 (:stat/lifetime (first tx))))
-            (is (== 2.0 (:stat/decayed (first tx))))))
+          (let [tx (recall-count/plan-recalls db "bob" 14 {["domain" "clojure"] 2} (System/currentTimeMillis))]
+            (is (== 2 (:recall/lifetime (first tx))))
+            (is (== 2.0 (:recall/decayed (first tx))))))
         (testing "an empty pair-counts plans nothing"
-          (is (= [] (stats/plan-recalls db "alice" 14 {} (System/currentTimeMillis)))))
+          (is (= [] (recall-count/plan-recalls db "alice" 14 {} (System/currentTimeMillis)))))
         (testing "the planner writes nothing: the stored lifetime is still one"
-          (is (== 1 (:lifetime (first (stats/recalls conn "alice" 14)))))))
+          (is (== 1 (:lifetime (first (recall-count/all-recall-rows conn "alice" 14)))))))
       (finally (d/close conn)))))
 
-(deftest stats-injective-across-user-space
+(deftest recall-count-injective-across-user-space
   (let [conn (fresh-conn)]
     (try
       (seed-recall! conn "alice one" 14 [["domain" "clojure"]])
       (seed-recall! conn "alice" 14 [["domain" "clojure"]])
       (seed-recall! conn "alice" 14 [["domain" "clojure"]])
       (testing "user ids that differ by a space keep separate rows via the composite tuple"
-        (is (= 1 (:lifetime (first (stats/recalls conn "alice one" 14)))))
-        (is (= 2 (:lifetime (first (stats/recalls conn "alice" 14))))))
+        (is (= 1 (:lifetime (first (recall-count/all-recall-rows conn "alice one" 14)))))
+        (is (= 2 (:lifetime (first (recall-count/all-recall-rows conn "alice" 14))))))
       (finally (d/close conn)))))
 
 (deftest catalog-covers-the-pair-universe
@@ -776,7 +777,7 @@
       (memory/create! conn "bob" {:content "secret" :src "z" :tags [["domain" "haskell"]]})
       (seed-recall! conn "alice" 14 [["tech" "datalevin"]])
       (seed-recall! conn "alice" 14 [["tech" "datalevin"]])
-      (let [rows (stats/catalog conn "alice" 14)
+      (let [rows (recall-count/catalog conn "alice" 14)
             by-pair (into {} (map (juxt (juxt :category :label) identity)) rows)
             cold (by-pair ["domain" "clojure"])
             warm (by-pair ["tech" "datalevin"])]
@@ -802,7 +803,7 @@
       (memory/create! conn "alice" {:content "m2" :src "b" :tags [["domain" "clojure"]]})
       (memory/create! conn "alice" {:content "m3" :src "c" :tags [["domain" "databases"]]})
       (let [by-pair (into {} (map (juxt (juxt :category :label) :count))
-                          (stats/catalog conn "alice" 14))]
+                          (recall-count/catalog conn "alice" 14))]
         (testing "the count equals the number of the caller's memories that carry the pair"
           (is (== 2 (by-pair ["domain" "clojure"])))
           (is (== 1 (by-pair ["domain" "databases"])))))
@@ -1222,26 +1223,26 @@
     (try
       (let [id (memory/create! conn "alice" {:content "m" :src "m" :tags [["domain" "clojure"]]})]
         (testing "a first count starts the lifetime and the decayed weight at the count"
-          (let [tx (stats/plan-memory-recalls (d/db conn) 14 {id 2} (System/currentTimeMillis))]
+          (let [tx (recall-count/plan-memory-recalls (d/db conn) 14 {id 2} (System/currentTimeMillis))]
             (is (== 1 (count tx)))
             (is (== 2 (:memory/recall-lifetime (first tx))))
             (is (== 2.0 (:memory/recall-decayed (first tx))))
             (is (instance? java.util.Date (:memory/last-recalled (first tx))))))
         (testing "an empty id-counts plans nothing"
-          (is (= [] (stats/plan-memory-recalls (d/db conn) 14 {} (System/currentTimeMillis)))))
+          (is (= [] (recall-count/plan-memory-recalls (d/db conn) 14 {} (System/currentTimeMillis)))))
         (testing "the planner writes nothing"
           (is (empty? (mem-counts conn "alice"))))
         (testing "a later count adds to the stored lifetime and decays the prior weight"
-          (d/transact! conn (stats/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis)))
-          (let [tx (stats/plan-memory-recalls (d/db conn) 14 {id 1} (System/currentTimeMillis))]
+          (d/transact! conn (recall-count/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis)))
+          (let [tx (recall-count/plan-memory-recalls (d/db conn) 14 {id 1} (System/currentTimeMillis))]
             (is (== 4 (:memory/recall-lifetime (first tx))))
             (is (< 3.0 (:memory/recall-decayed (first tx)) 4.001)))))
       (finally (d/close conn)))))
 
 (deftest memory-recall-count-records-on-recall-by-tags
   (let [conn (fresh-conn)
-        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
-        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+        mw   (rc-writer/writer conn (recall-count/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (rc-writer/writer conn (recall-count/->TagRecallCount 14)) mw)]
     (try
       ;; a matches the tag and links to b; b is pulled in only by the closure.
       (request app :post "/memories" {:user "alice" :accept "application/json"
@@ -1250,7 +1251,7 @@
                                       :body {:content "fb" :src "b" :tags [["domain" "clojure"]]}})
       (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/json"
                                                      :body {:tags [["domain" "clojure"]]}})
-      (stat-writer/drain! mw)
+      (rc-writer/drain! mw)
       (let [by-src (mem-counts conn "alice")]
         (testing "the tag match gains a recall count"
           (is (== 1 (get-in by-src ["a" :lifetime])))
@@ -1263,8 +1264,8 @@
 
 (deftest memory-recall-count-records-on-recall-by-ids
   (let [conn (fresh-conn)
-        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
-        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+        mw   (rc-writer/writer conn (recall-count/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (rc-writer/writer conn (recall-count/->TagRecallCount 14)) mw)]
     (try
       (let [a (:id (body-json (request app :post "/memories"
                                        {:user "alice" :accept "application/json"
@@ -1272,7 +1273,7 @@
         (request app :post "/memories" {:user "alice" :accept "application/json"
                                         :body {:content "fb" :src "b" :tags [["domain" "clojure"]]}})
         (request app :post "/memories/recall/by-ids" {:user "alice" :accept "application/json" :body {:ids [a]}})
-        (stat-writer/drain! mw)
+        (rc-writer/drain! mw)
         (let [by-src (mem-counts conn "alice")]
           (testing "the id and its closure each gain a recall count"
             (is (== 1 (get-in by-src ["a" :lifetime])))
@@ -1281,21 +1282,21 @@
 
 (deftest search-does-not-record-memory-recall-count
   (let [conn (fresh-conn)
-        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
-        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+        mw   (rc-writer/writer conn (recall-count/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (rc-writer/writer conn (recall-count/->TagRecallCount 14)) mw)]
     (try
       (request app :post "/memories" {:user "alice" :accept "application/json"
                                       :body {:content "deploy to the pi" :src "deploy" :tags [["domain" "clojure"]]}})
       (request app :post "/memories/search" {:user "alice" :accept "application/json" :body {:search "deploy"}})
-      (stat-writer/drain! mw)
+      (rc-writer/drain! mw)
       (testing "a search records no memory recall count"
         (is (empty? (mem-counts conn "alice"))))
       (finally (d/close conn)))))
 
 (deftest memory-recall-count-off-the-wire-and-off-updated-at
   (let [conn (fresh-conn)
-        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
-        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+        mw   (rc-writer/writer conn (recall-count/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (rc-writer/writer conn (recall-count/->TagRecallCount 14)) mw)]
     (try
       (let [id     (:id (body-json (request app :post "/memories"
                                             {:user "alice" :accept "application/json"
@@ -1304,7 +1305,7 @@
             resp   (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/json"
                                                                   :body {:tags [["domain" "clojure"]]}})
             mem    (first (:memories (body-json resp)))]
-        (stat-writer/drain! mw)
+        (rc-writer/drain! mw)
         (testing "the recall wire carries the freshness band but no recall-count keys"
           (is (= #{:id :content :src :tags :freshness} (set (keys mem)))))
         (testing "the memory was counted"
@@ -1315,15 +1316,15 @@
 
 (deftest memory-recall-count-records-over-ndjson-stream
   (let [conn (fresh-conn)
-        mw   (stat-writer/writer conn (stats/->MemoryRecallCount 14))
-        app  (handler/app conn cfg (stat-writer/writer conn (stats/->TagRecallCount 14)) mw)]
+        mw   (rc-writer/writer conn (recall-count/->MemoryRecallCount 14))
+        app  (handler/app conn cfg (rc-writer/writer conn (recall-count/->TagRecallCount 14)) mw)]
     (try
       (request app :post "/memories" {:user "alice" :accept "application/json"
                                       :body {:content "x" :src "s" :tags [["domain" "clojure"]]}})
       (let [resp (request app :post "/memories/recall/by-tags" {:user "alice" :accept "application/x-ndjson"
                                                                 :body {:tags [["domain" "clojure"]]}})]
         (slurp (:body resp))                         ; realize the stream, which taps the ids
-        (stat-writer/drain! mw)
+        (rc-writer/drain! mw)
         (testing "the streamed recall records the delivered memory"
           (is (== 1 (get-in (mem-counts conn "alice") ["s" :lifetime])))))
       (finally (d/close conn)))))
@@ -1779,7 +1780,7 @@
       (let [id (memory/create! conn "alice" {:content "m" :src "s"})]
         (memory/delete! conn "alice" id)
         (testing "a recall-count flush for a gone memory plans nothing, so no ghost"
-          (is (empty? (stats/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis))))))
+          (is (empty? (recall-count/plan-memory-recalls (d/db conn) 14 {id 3} (System/currentTimeMillis))))))
       (finally (d/close conn)))))
 
 (deftest confirm-stamps-owned-only
@@ -2151,3 +2152,45 @@
         (testing "a short-term full-text search never matches a Memory's content"
           (is (= 1 (short-term/match-count conn "alice" "pipeline")))))
       (finally (d/close conn)))))
+
+;; ---------- ticket 24: the recall-count rename data migration ----------
+
+(deftest copy-stat-rows-to-recall
+  (testing "migration 006's copy step moves a :stat/* row onto :recall/* in place"
+    (let [dir  (.toString (Files/createTempDirectory "engram-mig" (make-array FileAttribute 0)))
+          conn (d/get-conn dir)]
+      (try
+        ;; The pre-006 shape (the :stat/* attrs) beside the new :recall/* attrs,
+        ;; so the copy step has both schemas, as it does mid-migration.
+        (d/update-schema conn
+          {:stat/user     {:db/valueType :db.type/string}
+           :stat/category {:db/valueType :db.type/string}
+           :stat/label    {:db/valueType :db.type/string}
+           :stat/lifetime {:db/valueType :db.type/long}
+           :stat/decayed  {:db/valueType :db.type/double}
+           :stat/last-request {:db/valueType :db.type/instant}
+           :recall/user     {:db/valueType :db.type/string}
+           :recall/category {:db/valueType :db.type/string}
+           :recall/label    {:db/valueType :db.type/string}
+           :recall/user+category+label {:db/tupleAttrs [:recall/user :recall/category :recall/label]
+                                        :db/unique :db.unique/identity}
+           :recall/lifetime {:db/valueType :db.type/long}
+           :recall/decayed  {:db/valueType :db.type/double}
+           :recall/last-recalled {:db/valueType :db.type/instant}})
+        (let [d0 (java.util.Date.)]
+          (d/transact! conn [{:stat/user "alice" :stat/category "domain" :stat/label "clojure"
+                              :stat/lifetime 7 :stat/decayed 3.5 :stat/last-request d0}
+                             {:stat/user "bob" :stat/category "tech" :stat/label "datalevin"
+                              :stat/lifetime 2 :stat/decayed 1.0 :stat/last-request d0}])
+          (migrations/copy-stat->recall conn)
+          (testing "every stored row's values land on :recall/*, last-request as last-recalled"
+            (is (= [7 3.5 d0]
+                   (d/q '[:find [?life ?dec ?last] :in $ ?u ?c ?l
+                          :where [?s :recall/user ?u] [?s :recall/category ?c] [?s :recall/label ?l]
+                                 [?s :recall/lifetime ?life] [?s :recall/decayed ?dec]
+                                 [?s :recall/last-recalled ?last]]
+                        (d/db conn) "alice" "domain" "clojure"))))
+          (testing "the identity tuple rebuilds, so the row is addressable by it"
+            (is (some? (d/q '[:find ?s . :in $ ?t :where [?s :recall/user+category+label ?t]]
+                            (d/db conn) ["bob" "tech" "datalevin"])))))
+        (finally (d/close conn))))))

@@ -1,7 +1,7 @@
 (ns engram.decay
   "The recall-recency decay kernel. Pure, stateless, and schema-free: the
   exponential `0.5 ^ (elapsed / half-life)` curve that ages a recall count. The
-  tag counts in `engram.stats` and the per-memory count in `engram.memory` both
+  tag counts and the per-memory count in `engram.recall-count` both
   decay through it. Confirmation freshness has the same shape but keeps its own
   curve in `engram.freshness`, so the two senses stay free to diverge."
   (:import [java.util Date]))

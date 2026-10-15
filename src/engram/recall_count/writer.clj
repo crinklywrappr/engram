@@ -1,5 +1,5 @@
-(ns engram.stats.writer
-  "The stat-write consumer.
+(ns engram.recall-count.writer
+  "The recall-count write consumer.
 
   One agent is the only serialization point, and it dispatches every action
   through a single-thread daemon executor the writer owns (send-via, not send
@@ -10,10 +10,10 @@
   the shared agent pools, so its threads are daemon and the JVM exits without
   shutdown-agents. A request thread hands a recall in and returns at once. A
   flush drains the pending recalls to one transaction through the pure planner
-  in `engram.stats`. The decay uses a clock captured at flush time, a bounded
-  drift held as a known limit."
+  in `engram.recall-count`. The decay uses a clock captured at flush time, a
+  bounded drift held as a known limit."
   (:require [datalevin.core :as d]
-            [engram.stats :as stats]
+            [engram.recall-count :as rc]
             [taoensso.telemere :as t])
   (:import [java.util.concurrent Executors ExecutorService RejectedExecutionException
                                  ScheduledExecutorService ScheduledFuture ThreadFactory TimeUnit]))
@@ -32,7 +32,7 @@
         ;; is atomic with the commit. A concurrent delete then cannot be
         ;; resurrected by a stamp the flush planned against a stale snapshot.
         (d/transact! (:conn writer)
-                     [[:db.fn/call (fn [db] (stats/->writes strategy pending-recalls db flush-ms))]])
+                     [[:db.fn/call (fn [db] (rc/->writes strategy pending-recalls db flush-ms))]])
         (assoc state :pending-recalls {} :timer nil :first-ms nil))
       (catch Throwable e
         (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")
@@ -58,14 +58,14 @@
   writer's strategy, then cancel the prior scheduled flush and reschedule one. A
   repeated item adds one to its count."
   [{:keys [timer first-ms] :as state} writer user xs]
-  (let [pending' (stats/->pending (:strategy writer) (:pending-recalls state) user xs)
+  (let [pending' (rc/->pending (:strategy writer) (:pending-recalls state) user xs)
         first-ms (or first-ms (System/currentTimeMillis))]
     (when-let [^ScheduledFuture t timer] (.cancel t false))
     (assoc state :pending-recalls pending' :first-ms first-ms :timer (schedule-flush! writer first-ms))))
 
 (defn writer
-  "Create the stat-write consumer with a debounced flush. The `strategy` is a
-  `engram.stats/RecallCountWritable` record (a `TagRecallCount` or a
+  "Create the recall-count write consumer with a debounced flush. The `strategy`
+  is a `engram.recall-count/RecallCountWritable` record (a `TagRecallCount` or a
   `MemoryRecallCount`). It decides how recorded items fold into the pending map
   and how that map becomes tx-data, so the writer machinery is the same for both
   kinds. Its agent value holds the pending recalls, the scheduled flush, and the

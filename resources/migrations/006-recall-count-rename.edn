@@ -1,0 +1,30 @@
+;; Rename the pair recall-count attributes from :stat/* to :recall/*, so the
+;; recall-count model is named for the recall count, not for the /stats route
+;; (ticket 24). The per-memory recall count already lives at :memory/recall-* and
+;; needs no rename.
+;;
+;; Three :up steps:
+;;   1. :schema/create the :recall/* attributes and the identity tuple.
+;;   2. engram.migrations/copy-stat->recall copies each stored row's values onto
+;;      the same entity, so the tuple rebuilds in place.
+;;   3. :schema/remove the old tuple and the old :stat/* attributes.
+;;
+;; :transaction? false, so step 1 commits the new schema before step 2 reads it,
+;; and before step 3 drops the old attributes. This avoids a mid-transaction
+;; schema-visibility quirk. :irreversible? true, because the copy and the remove
+;; have no auto-inverse. The cron backup of the data directory is the rollback
+;; path. No attribute is full-text, so the migration triggers no re-index.
+{:transaction? false
+ :irreversible? true
+ :up [{:schema/create {:recall/user     {:db/valueType :db.type/string}
+                       :recall/category {:db/valueType :db.type/string}
+                       :recall/label    {:db/valueType :db.type/string}
+                       :recall/user+category+label {:db/tupleAttrs [:recall/user :recall/category :recall/label]
+                                                    :db/unique :db.unique/identity}
+                       :recall/lifetime {:db/valueType :db.type/long}
+                       :recall/decayed  {:db/valueType :db.type/double}
+                       :recall/last-recalled {:db/valueType :db.type/instant}}}
+      engram.migrations/copy-stat->recall
+      {:schema/remove [:stat/user+category+label
+                       :stat/user :stat/category :stat/label
+                       :stat/lifetime :stat/decayed :stat/last-request]}]}

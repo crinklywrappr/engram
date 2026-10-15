@@ -2,13 +2,13 @@
  :engram.db/migrated    {:conn #ig/ref :engram.db/conn
                          :path "data/engram"}
  :engram.config/config  {:path "deploy/engram-config.example.edn"}
- :engram.stats/tag-writer {:conn   #ig/ref :engram.db/migrated
-                           :config #ig/ref :engram.config/config}
- :engram.stats/mem-writer {:conn   #ig/ref :engram.db/migrated
-                           :config #ig/ref :engram.config/config}
+ :engram.recall-count/tag-writer {:conn   #ig/ref :engram.db/migrated
+                                  :config #ig/ref :engram.config/config}
+ :engram.recall-count/mem-writer {:conn   #ig/ref :engram.db/migrated
+                                  :config #ig/ref :engram.config/config}
  :engram.web/handler    {:db         #ig/ref :engram.db/migrated
                          :config     #ig/ref :engram.config/config
-                         :tag-writer #ig/ref :engram.stats/tag-writer
-                         :mem-writer #ig/ref :engram.stats/mem-writer}
+                         :tag-writer #ig/ref :engram.recall-count/tag-writer
+                         :mem-writer #ig/ref :engram.recall-count/mem-writer}
  :engram.web/server     {:handler #ig/ref :engram.web/handler
                          :port 8080}}

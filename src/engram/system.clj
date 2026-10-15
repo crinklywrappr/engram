@@ -17,8 +17,8 @@
             [engram.handler :as handler]
             [engram.migrations :as migrations]
             [engram.search-config :as search-config]
-            [engram.stats :as stats]
-            [engram.stats.writer :as stat-writer]
+            [engram.recall-count :as recall-count]
+            [engram.recall-count.writer :as rc-writer]
             [integrant.core :as ig]
             [org.httpkit.server :as hk]
             [syncopate.core :as sc]))
@@ -59,19 +59,19 @@
   (let [c (config/load-config path)]
     (assoc c :tag-schema (config/compile-tag-schema c))))
 
-(defmethod ig/init-key :engram.stats/tag-writer [_ {:keys [conn config]}]
-  (stat-writer/writer conn (stats/->TagRecallCount (:recall-half-life-days config))))
+(defmethod ig/init-key :engram.recall-count/tag-writer [_ {:keys [conn config]}]
+  (rc-writer/writer conn (recall-count/->TagRecallCount (:recall-half-life-days config))))
 
-(defmethod ig/halt-key! :engram.stats/tag-writer [_ writer]
+(defmethod ig/halt-key! :engram.recall-count/tag-writer [_ writer]
   ;; drain the pending recalls while the connection is still open
-  (stat-writer/drain! writer))
+  (rc-writer/drain! writer))
 
-(defmethod ig/init-key :engram.stats/mem-writer [_ {:keys [conn config]}]
-  (stat-writer/writer conn (stats/->MemoryRecallCount (:recall-half-life-days config))))
+(defmethod ig/init-key :engram.recall-count/mem-writer [_ {:keys [conn config]}]
+  (rc-writer/writer conn (recall-count/->MemoryRecallCount (:recall-half-life-days config))))
 
-(defmethod ig/halt-key! :engram.stats/mem-writer [_ writer]
+(defmethod ig/halt-key! :engram.recall-count/mem-writer [_ writer]
   ;; drain the pending recalls while the connection is still open
-  (stat-writer/drain! writer))
+  (rc-writer/drain! writer))
 
 (defmethod ig/init-key :engram.web/handler [_ {:keys [db config tag-writer mem-writer]}]
   (handler/app db config tag-writer mem-writer))

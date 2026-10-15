@@ -16,10 +16,11 @@
             [engram.errors :as errors]
             [engram.memory :as memory]
             [engram.middleware :as mw]
+            [engram.recall-count :as recall-count]
+            [engram.recall-count.writer :as rc-writer]
             [engram.schema :as schema]
             [engram.short-term :as short-term]
             [engram.stats :as stats]
-            [engram.stats.writer :as stat-writer]
             [jsonista.core :as json]
             [muuntaja.core :as mc]
             [reitit.coercion.malli :as rcm]
@@ -66,8 +67,8 @@
   (let [user   (:engram/user req)
         tags   (get-in req [:parameters :body :tags])
         mems   (memory/recall-by-tags conn user tags (:freshness-half-life-days cfg))
-        record (fn [ids] (stat-writer/record-memories! mem-writer user ids))]
-    (stat-writer/record-pairs! tag-writer user tags)
+        record (fn [ids] (rc-writer/record-memories! mem-writer user ids))]
+    (rc-writer/record-pairs! tag-writer user tags)
     (if (wants-ndjson? req)
       (ndjson-response {:header true :tags tags} mems record)
       (let [v (vec mems)]
@@ -78,7 +79,7 @@
   (let [user   (:engram/user req)
         ids    (get-in req [:parameters :body :ids])
         mems   (memory/recall-by-ids conn user ids (:freshness-half-life-days cfg))
-        record (fn [rids] (stat-writer/record-memories! mem-writer user rids))]
+        record (fn [rids] (rc-writer/record-memories! mem-writer user rids))]
     (if (wants-ndjson? req)
       (ndjson-response {:header true :ids ids} mems record)
       (let [v (vec mems)]
@@ -124,7 +125,7 @@
 (defn- recalls-handler [conn cfg req]
   (let [user (:engram/user req)
         cats (parse-categories (get-in req [:parameters :query :categories]))
-        rows (cond->> (stats/catalog conn user (:recall-half-life-days cfg))
+        rows (cond->> (recall-count/catalog conn user (:recall-half-life-days cfg))
                cats (filter (comp cats :category)))]
     {:status 200 :body {:recalls (mapv recall-row rows)}}))
 
