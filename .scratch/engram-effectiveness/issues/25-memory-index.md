@@ -16,7 +16,13 @@ There is no full-text search request. Each request carries a `required?` flag, d
 
 A required request is a liveness probe. An entry lapses once any one required request returns no memory. engram removes a lapsed entry. An entry with no required request stays until Claude deletes it.
 
-Every request kind is an index-backed existence check, so a probe is fast. A `by-tags` probe folds over the tag store and short-circuits at the first match. A `by-ids` probe asks whether any listed id still resolves to the caller. A `thought-process` probe asks whether the bucket holds a note. A probe runs in existence mode, so it asks only whether the request yields at least one memory.
+Every request kind is an index-backed existence check, so a probe is fast. A probe runs in existence mode. It asks only whether the request yields at least one memory. So it binds a single result and drops the related closure that the full recall walks.
+
+A `by-tags` probe runs the ticket 22 match compiler in existence mode. It reuses `match->clauses` to build the query `[:find ?e . :in $ ?u :where [?e :memory/user ?u] <clauses>]`. The query binds `?e` to any one matching memory. When no memory matches, the query returns nil. The probe and the full `recall-by-match` share that one compiler, so they can never disagree about what matches. A `by-ids` probe asks whether any listed id still resolves to the caller, an indexed point lookup on `:memory/id`. A `thought-process` probe asks whether the bucket holds a note, an indexed point lookup on `:short-term/process`.
+
+Each existence check lives beside its recall counterpart, not reimplemented: a new `any-match?` in `engram.memory` built on `match->clauses`, a new `resolves-any?` for the id list, and the short-term bucket lookup for the thought-process name. The full recall the skill runs still goes through the existing `recall-by-match` and `recall-by-ids`.
+
+A benchmark over a single user's store set the budget. A `by-tags` probe that still matches runs in about 0.05 ms. A lapsed `by-tags` probe, the worst case, runs in about 0.5 to 0.8 ms. Both held flat from 1000 to 5000 memories, because the planner leads with the selective tag index rather than scanning the user set. The `by-ids` and `thought-process` point lookups are cheaper. These numbers are the target and the regression tripwire.
 
 ## Routes
 
@@ -39,15 +45,15 @@ This ticket delivers the index schema, the four routes, and the `engram-recall` 
 
 **Blocked by:** 22 (the `:match` expression the `by-tags` request stores). The design also draws on the session-start recall backbone work in 12 and 23.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A migration adds an `:index/*` entity, separate from the Memory and the short-term entities.
-- [ ] An index entry carries an id, the owning user, a kebab-case title, a hook, and one or more requests.
-- [ ] A request is a `by-tags` match, a `by-ids` list, or a `thought-process` name, each with a `required?` flag.
-- [ ] `POST /index` creates an entry and returns a server-assigned id.
-- [ ] `PUT /index/:id` replaces an entry, and `DELETE /index/:id` removes one, each 404 for a non-caller id.
-- [ ] `GET /index` returns the caller's live entries.
-- [ ] `GET /index` probes every required request in existence mode and removes a lapsed entry, inside one transaction.
-- [ ] An entry with no required request survives a `GET /index`.
-- [ ] Every route filters by user, so one user never reads or touches another user's index.
-- [ ] The `engram-recall` skill loads the index as step 2, after the config load, and keeps the search and recall guidance.
+- [x] A migration adds an `:index/*` entity, separate from the Memory and the short-term entities.
+- [x] An index entry carries an id, the owning user, a kebab-case title, a hook, and one or more requests.
+- [x] A request is a `by-tags` match, a `by-ids` list, or a `thought-process` name, each with a `required?` flag.
+- [x] `POST /index` creates an entry and returns a server-assigned id.
+- [x] `PUT /index/:id` replaces an entry, and `DELETE /index/:id` removes one, each 404 for a non-caller id.
+- [x] `GET /index` returns the caller's live entries.
+- [x] `GET /index` probes every required request in existence mode and removes a lapsed entry, inside one transaction.
+- [x] An entry with no required request survives a `GET /index`.
+- [x] Every route filters by user, so one user never reads or touches another user's index.
+- [x] The `engram-recall` skill loads the index as step 2, after the config load, and keeps the search and recall guidance.

@@ -142,6 +142,14 @@
                :where [?e :short-term/user ?u] [?e :short-term/process ?p]]
              (d/db conn) user)))
 
+(defn bucket-has-note?
+  "True when `user` holds at least one note under `process`. The existence-mode
+  probe for an index thought-process request: an indexed point lookup on
+  `:short-term/process`. Takes a `db` value, so it can run inside a transaction
+  function against the commit-time db."
+  [db user process]
+  (boolean (seq (process-eids db user process))))
+
 (defn- fulltext-doc-count
   "An upper bound on the number of full-text documents in the store: the datom
   count over every full-text attribute in `attrs`. Datalevin bounds a full-text

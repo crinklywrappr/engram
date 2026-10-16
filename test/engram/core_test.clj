@@ -8,6 +8,7 @@
             [engram.expr :as expr]
             [engram.freshness :as freshness]
             [engram.handler :as handler]
+            [engram.index :as index]
             [engram.memory :as memory]
             [engram.migrations :as migrations]
             [engram.search-config :as search-config]
@@ -2319,3 +2320,146 @@
                                   (fn [op kids] (if (= :not op) {op (first kids)} {op (vec kids)}))
                                   deep)]
       (is (= 100000 (depth rebuilt))))))
+
+;; ---------- memory index (ticket 25) ----------
+
+(defn- index-entry [resp] (:entries (body-json resp)))
+
+(deftest index-crud-round-trip
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (testing "an empty index reads as no entries"
+        (let [resp (request app :get "/index" {:user "alice" :accept "application/json"})]
+          (is (= 200 (:status resp)))
+          (is (= [] (index-entry resp)))))
+      (let [id (:id (body-json
+                     (request app :post "/index"
+                              {:user "alice" :accept "application/json"
+                               :body {:title "engram-work" :hook "the engram project"
+                                      :requests [{:kind "by-tags" :payload ["domain" "clojure"]}]}})))]
+        (testing "a create returns a server-minted id"
+          (is (string? id)))
+        (testing "a read returns the created entry"
+          (let [entries (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))
+                e       (first entries)]
+            (is (= 1 (count entries)))
+            (is (= id (:id e)))
+            (is (= "engram-work" (:title e)))
+            (is (= "the engram project" (:hook e)))
+            (is (= [{:kind "by-tags" :payload ["domain" "clojure"] :required false}] (:requests e)))))
+        (testing "a put replaces the entry in place, keeping the id"
+          (let [resp (request app :put (str "/index/" id)
+                              {:user "alice" :accept "application/json"
+                               :body {:title "engram-recall" :hook "recall backbone"
+                                      :requests [{:kind "thought-process" :payload "engram-decompress" :required false}]}})]
+            (is (= 200 (:status resp)))
+            (let [e (first (index-entry (request app :get "/index" {:user "alice" :accept "application/json"})))]
+              (is (= id (:id e)))
+              (is (= "engram-recall" (:title e)))
+              (is (= [{:kind "thought-process" :payload "engram-decompress" :required false}] (:requests e))))))
+        (testing "a delete removes the entry"
+          (is (= 200 (:status (request app :delete (str "/index/" id) {:user "alice" :accept "application/json"}))))
+          (is (= [] (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest index-is-per-user-isolated
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [id (:id (body-json
+                     (request app :post "/index"
+                              {:user "alice" :accept "application/json"
+                               :body {:title "alice-work" :hook "hers"
+                                      :requests [{:kind "by-tags" :payload ["domain" "clojure"]}]}})))]
+        (testing "another user never reads the first user's index"
+          (is (= [] (index-entry (request app :get "/index" {:user "bob" :accept "application/json"})))))
+        (testing "a put against another user's id is a 404"
+          (is (= 404 (:status (request app :put (str "/index/" id)
+                                       {:user "bob" :accept "application/json"
+                                        :body {:title "bob-work" :hook "his"
+                                               :requests [{:kind "by-tags" :payload ["domain" "clojure"]}]}})))))
+        (testing "a delete against another user's id is a 404"
+          (is (= 404 (:status (request app :delete (str "/index/" id) {:user "bob" :accept "application/json"})))))
+        (testing "the first user's entry is untouched"
+          (is (= 1 (count (index-entry (request app :get "/index" {:user "alice" :accept "application/json"})))))))
+      (finally (d/close conn)))))
+
+(deftest index-reaps-a-lapsed-required-request
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [mem (:id (body-json (request app :post "/memories"
+                                         {:user "alice" :accept "application/json"
+                                          :body {:content "a fact" :src "s1"
+                                                 :tags [["domain" "clojure"]]}})))]
+        (request app :post "/index"
+                 {:user "alice" :accept "application/json"
+                  :body {:title "live-entry" :hook "probes a real pair"
+                         :requests [{:kind "by-tags" :payload ["domain" "clojure"] :required true}]}})
+        (testing "the entry lives while its required request still matches"
+          (is (= 1 (count (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+        (request app :delete (str "/memories/" mem) {:user "alice" :accept "application/json"})
+        (testing "the entry is reaped once its required request matches nothing"
+          (is (= [] (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest index-without-a-required-request-survives
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      ;; the by-tags pair matches no memory, but the request is not required
+      (request app :post "/index"
+               {:user "alice" :accept "application/json"
+                :body {:title "sticky-entry" :hook "no liveness probe"
+                       :requests [{:kind "by-tags" :payload ["domain" "clojure"]}]}})
+      (testing "an entry with no required request survives a read even when nothing matches"
+        (is (= 1 (count (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest index-probes-every-request-kind
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (let [mem (:id (body-json (request app :post "/memories"
+                                         {:user "alice" :accept "application/json"
+                                          :body {:content "a fact" :src "s1"
+                                                 :tags [["domain" "clojure"]]}})))]
+        (short-term/create! conn "alice" "engram-work" "a staged note")
+        (request app :post "/index"
+                 {:user "alice" :accept "application/json"
+                  :body {:title "by-ids-entry" :hook "probes an id"
+                         :requests [{:kind "by-ids" :payload [mem] :required true}]}})
+        (request app :post "/index"
+                 {:user "alice" :accept "application/json"
+                  :body {:title "process-entry" :hook "probes a bucket"
+                         :requests [{:kind "thought-process" :payload "engram-work" :required true}]}})
+        (testing "a by-ids and a thought-process required request both live when their target exists"
+          (is (= 2 (count (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+        (request app :delete (str "/memories/" mem) {:user "alice" :accept "application/json"})
+        (short-term/wipe! conn "alice" "engram-work")
+        (testing "both lapse once their targets are gone"
+          (is (= [] (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))
+
+(deftest index-existence-helpers
+  (let [conn (fresh-conn)]
+    (try
+      (memory/create! conn "alice" {:content "a" :src "s1" :tags [["domain" "clojure"]]})
+      (let [mem (memory/create! conn "alice" {:content "b" :src "s2" :tags [["tech" "datalevin"]]})
+            db  (d/db conn)]
+        (testing "any-match? is existence over the match compiler"
+          (is (true?  (memory/any-match? db "alice" ["domain" "clojure"])))
+          (is (false? (memory/any-match? db "alice" ["domain" "web"])))
+          (is (true?  (memory/any-match? db "alice" {:or [["domain" "web"] ["tech" "datalevin"]]})))
+          (is (false? (memory/any-match? db "bob"   ["domain" "clojure"]))))
+        (testing "resolves-any? is existence over the caller's own ids"
+          (is (true?  (memory/resolves-any? db "alice" [mem])))
+          (is (false? (memory/resolves-any? db "bob"   [mem])))
+          (is (false? (memory/resolves-any? db "alice" []))))
+        (testing "bucket-has-note? is existence over a thought-process"
+          (short-term/create! conn "alice" "engram-work" "note")
+          (is (true?  (memory/any-match? (d/db conn) "alice" ["domain" "clojure"]))) ; sanity on fresh db
+          (is (true?  (short-term/bucket-has-note? (d/db conn) "alice" "engram-work")))
+          (is (false? (short-term/bucket-has-note? (d/db conn) "alice" "absent-bucket")))))
+      (finally (d/close conn)))))

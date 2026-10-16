@@ -62,6 +62,39 @@ When the admin describes the categories, the body also carries a `categories`
 map. Each entry gives one category a `description` and a vector of `examples`.
 Read them to pick labels that match how the admin means each category.
 
+## Session start: load the index
+
+Run `ssh engram GET /index < /dev/null` one time per session, after the
+configuration load. It returns `{"entries": [ ... ]}`. An entry is one item in
+the index. Each entry carries a `title`, a `hook`, and one or more
+`requests`. The title is a short handle. The hook is a one-line note on the
+entry's relevance.
+
+Read the titles and the hooks first. For an entry that fits the session, run its
+requests as normal recall calls. A request names how to load its memories:
+
+- A `by-tags` request carries a match expression. Send it as `{"match":
+  <payload>}` to `POST /memories/recall/by-tags`.
+- A `by-ids` request carries a list of ids. Send it as `{"ids": <payload>}` to
+  `POST /memories/recall/by-ids`.
+- A `thought-process` request carries a bucket name. Load it from `POST
+  /memories/short-term/search?thought_process=<payload>`.
+
+The index reaps a stale entry on its own. A request can carry `"required": true`.
+That marks it a liveness probe. When a required request matches no memory, `GET
+/index` removes the whole entry. So an entry stays only while its required
+requests still resolve.
+
+Build the index as you work. When a recall pays off, create an entry. A later
+session then finds it fast:
+
+```bash
+echo '{"title":"engram-work","hook":"the engram memory server","requests":[{"kind":"by-tags","payload":{"and":[["project","engram"]]},"required":true}]}' | ssh engram POST /index
+```
+
+The server mints the id and returns it. Replace an entry with `PUT /index/<id>`
+and the same body. Remove one with `DELETE /index/<id>`.
+
 ## Short-term memory
 
 A short-term memory is a loose task note, not an atomic fact. It holds one

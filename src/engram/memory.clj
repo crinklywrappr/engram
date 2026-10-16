@@ -549,6 +549,31 @@
         rows (d/q (match-query expr) db related-rules user)]
     (query db user band #{} (seq rows) #{} [])))
 
+(defn any-match?
+  "True when `user` owns at least one memory matching `expr`, a nested match
+  expression. The existence-mode counterpart to `recall-by-match`: it reuses the
+  same `match->clauses` compiler, so the probe and the recall can never disagree
+  about what matches. It binds a single `?e` and drops the related closure, so it
+  is strictly cheaper than a recall. Takes a `db` value, so it can run inside a
+  transaction function against the commit-time db."
+  [db user expr]
+  (some? (d/q (vec (concat '[:find ?e . :in $ ?u :where [?e :memory/user ?u]]
+                           (match->clauses '?e expr)))
+              db user)))
+
+(defn resolves-any?
+  "True when at least one of `ids` resolves to a memory `user` owns. The
+  existence-mode counterpart to `recall-by-ids`: an indexed point lookup on
+  `:memory/id`, joined to the caller. An empty `ids` resolves nothing. `ids` are
+  uuid strings. Takes a `db` value, so it can run inside a transaction function."
+  [db user ids]
+  (boolean
+   (when (seq ids)
+     (seq (d/q '[:find [?e ...]
+                 :in $ ?u [?id ...]
+                 :where [?e :memory/id ?id] [?e :memory/user ?u]]
+               db user (mapv #(UUID/fromString %) ids))))))
+
 (defn- eids-by-ids [db user ids]
   (if (seq ids)
     (d/q '[:find ?e (distinct ?r)

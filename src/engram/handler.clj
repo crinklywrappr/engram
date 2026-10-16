@@ -15,6 +15,7 @@
             [engram.config :as config]
             [engram.errors :as errors]
             [engram.expr :as expr]
+            [engram.index :as index]
             [engram.memory :as memory]
             [engram.middleware :as mw]
             [engram.recall-count :as recall-count]
@@ -320,6 +321,36 @@
                                               :matches (short-term/match-count conn user q)}}
           :else           {:status 200 :body {:thought-processes (short-term/buckets conn user)}})))))
 
+;; ---------- memory index handlers (ticket 25) ----------
+
+(defn- index-read-handler
+  "Read the caller's live index. This is the garbage-collection point: it probes
+  every required request in existence mode and reaps the lapsed entries before it
+  returns the live ones."
+  [conn req]
+  (let [user (:engram/user req)]
+    {:status 200 :body {:entries (index/read-live! conn user)}}))
+
+(defn- index-create-handler [conn req]
+  (let [user  (:engram/user req)
+        entry (get-in req [:parameters :body])]
+    {:status 201 :body {:id (index/create! conn user entry)}}))
+
+(defn- index-replace-handler [conn req]
+  (let [user  (:engram/user req)
+        id    (get-in req [:parameters :path :id])
+        entry (get-in req [:parameters :body])]
+    (if (index/replace! conn user id entry)
+      {:status 200 :body {:id id}}
+      {:status 404 :body {:error "not found"}})))
+
+(defn- index-delete-handler [conn req]
+  (let [user (:engram/user req)
+        id   (get-in req [:parameters :path :id])]
+    (if (index/delete! conn user id)
+      {:status 200 :body {:deleted id}}
+      {:status 404 :body {:error "not found"}})))
+
 (defn- routes
   "The reitit route table, closing over the db conn, the loaded config, and the
   two stat-write consumers: the tag writer for pair counts and the memory writer
@@ -345,6 +376,20 @@
     ["/recalls" {:get {:parameters {:query [:map [:categories {:optional true} :string]]}
                        :responses  {200 {:body schema/RecallsOut}}
                        :handler (fn [req] (recalls-handler conn cfg req))}}]
+    ;; The per-user memory index (ticket 25). GET reaps lapsed entries, then
+    ;; returns the live ones. Static paths, so /index/:id never collides with a
+    ;; memory route.
+    ["/index" {:get  {:responses  {200 {:body schema/IndexOut}}
+                      :handler (fn [req] (index-read-handler conn req))}
+               :post {:parameters {:body schema/IndexEntryBody}
+                      :responses  {201 {:body schema/IdOut}}
+                      :handler (fn [req] (index-create-handler conn req))}}]
+    ["/index/:id" {:put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/IndexEntryBody}
+                            :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut}}
+                            :handler (fn [req] (index-replace-handler conn req))}
+                   :delete {:parameters {:path [:map [:id schema/IdStr]]}
+                            :responses  {200 {:body schema/DeletedOut} 404 {:body schema/ErrorOut}}
+                            :handler (fn [req] (index-delete-handler conn req))}}]
     ;; No :responses on GET: the NDJSON stream cannot be response-coerced (see /memories/recall/by-tags).
     ["/memories"       {:get  {:handler (fn [req] (memories-handler conn cfg req))}
                         :post {:parameters {:body schema/CreateBody}

@@ -1,0 +1,18 @@
+;; Per-user memory index entity (ticket 25). An index entry is one item in the
+;; memory index, loaded whole at session start, so recall leans on a curated map
+;; rather than a guess. An entry carries an id, the owning user, a kebab-case
+;; title, a free-text hook, and one or more requests. A request is a component
+;; entity that carries its kind, an opaque JSON payload, and a required? flag, so
+;; an arbitrary-depth match tree needs no shredding into datoms. The index is
+;; separate from the Memory and the short-term entities, and it never joins
+;; recall, stats, freshness, conformance, link density, or consolidate.
+;;
+;; syncopate additive creation migration: :down is auto-derived.
+{:up {:schema/create {:index/id                 {:db/valueType :db.type/uuid   :db/unique :db.unique/identity}
+                      :index/user               {:db/valueType :db.type/string}
+                      :index/title              {:db/valueType :db.type/string}
+                      :index/hook               {:db/valueType :db.type/string}
+                      :index/request            {:db/valueType :db.type/ref    :db/cardinality :db.cardinality/many :db/isComponent true}
+                      :index.request/kind       {:db/valueType :db.type/string}
+                      :index.request/payload    {:db/valueType :db.type/string}
+                      :index.request/required?  {:db/valueType :db.type/boolean}}}}

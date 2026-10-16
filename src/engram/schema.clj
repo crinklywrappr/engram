@@ -116,6 +116,36 @@
    [:update {:optional true} [:vector UpdatePayload]]
    [:delete {:optional true} [:vector IdStr]]])
 
+;; An index entry request (ticket 25): one stored recall body, tagged by kind. A
+;; by-tags request carries a Match expression, a by-ids request a list of ids, and
+;; a thought-process request a kebab-case process name. The payload shape is
+;; validated per kind by a :multi dispatch, so a by-ids payload under a by-tags
+;; kind coerces to 400. The required? flag is optional and defaults to false in
+;; the handler. Each branch map is closed, so a stray key is a 400.
+(def IndexRequest
+  [:multi {:dispatch :kind}
+   ["by-tags"         [:map {:closed true}
+                       [:kind [:= "by-tags"]]
+                       [:payload Match]
+                       [:required {:optional true} :boolean]]]
+   ["by-ids"          [:map {:closed true}
+                       [:kind [:= "by-ids"]]
+                       [:payload [:vector IdStr]]
+                       [:required {:optional true} :boolean]]]
+   ["thought-process" [:map {:closed true}
+                       [:kind [:= "thought-process"]]
+                       [:payload config/Token]
+                       [:required {:optional true} :boolean]]]])
+
+;; POST /index and PUT /index/:id request. An entry carries a kebab-case title, a
+;; non-empty free-text hook, and one or more requests. The server mints the id, so
+;; the body never carries one.
+(def IndexEntryBody
+  [:map
+   [:title config/Token]
+   [:hook [:string {:min 1}]]
+   [:requests [:vector {:min 1} IndexRequest]]])
+
 ;; ---------- response schemas (malli coercion -> validated + swagger) ----------
 
 ;; The recall wire shape. `->wire` omits an empty tags or related, so both are
@@ -185,6 +215,19 @@
 (def SearchOut [:map [:results [:vector SearchRow]]])
 (def IdOut      [:map [:id :string]])
 (def DeletedOut [:map [:deleted :string]])
+;; GET /index returns the caller's live entries. A request hands its payload back
+;; as the parsed JSON it stored, which is a match tree, an id list, or a string
+;; by kind, so :payload is :any. :required is always present on the wire.
+(def IndexRequestOut
+  [:map
+   [:kind [:enum "by-tags" "by-ids" "thought-process"]]
+   [:payload :any]
+   [:required :boolean]])
+(def IndexEntryOut
+  [:map
+   [:id :string] [:title :string] [:hook :string]
+   [:requests [:vector IndexRequestOut]]])
+(def IndexOut [:map [:entries [:vector IndexEntryOut]]])
 ;; A short-term note on the wire: kebab-case keys and ISO-8601 timestamps.
 (def ShortTermOut
   [:map
