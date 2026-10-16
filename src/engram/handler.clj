@@ -14,6 +14,7 @@
             [engram.build-info :as build-info]
             [engram.config :as config]
             [engram.errors :as errors]
+            [engram.expr :as expr]
             [engram.memory :as memory]
             [engram.middleware :as mw]
             [engram.recall-count :as recall-count]
@@ -63,17 +64,35 @@
 
 ;; ---------- handlers (bodies are already coerced into :parameters/:body) ------
 
-(defn- recall-by-tags-handler [conn cfg tag-writer mem-writer req]
+(defn- positive-pairs
+  "The leaf pairs of a match expression under positive polarity. A :not flips the
+  polarity of every leaf beneath it, so a negated leaf is dropped and a
+  double-negated leaf is kept. These are the pairs the recall leaned on, recorded
+  for the recall count. The fold is stack-safe, so a deep expression never
+  overflows. Each leaf carries its own polarity up, and a :not flips the set it
+  receives, which is the parity of the :not nodes on the path."
+  [match]
+  (->> (expr/transform
+        (fn [leaf] [[leaf true]])
+        (fn [op kids]
+          (let [leaves (apply concat kids)]
+            (if (= :not op)
+              (map (fn [[pair pos?]] [pair (not pos?)]) leaves)
+              leaves)))
+        match)
+       (keep (fn [[pair pos?]] (when pos? pair)))))
+
+(defn- recall-by-match-handler [conn cfg tag-writer mem-writer req]
   (let [user   (:engram/user req)
-        tags   (get-in req [:parameters :body :tags])
-        mems   (memory/recall-by-tags conn user tags (:freshness-half-life-days cfg))
+        match  (get-in req [:parameters :body :match])
+        mems   (memory/recall-by-match conn user match (:freshness-half-life-days cfg))
         record (fn [ids] (rc-writer/record-memories! mem-writer user ids))]
-    (rc-writer/record-pairs! tag-writer user tags)
+    (rc-writer/record-pairs! tag-writer user (distinct (positive-pairs match)))
     (if (wants-ndjson? req)
-      (ndjson-response {:header true :tags tags} mems record)
+      (ndjson-response {:header true :match match} mems record)
       (let [v (vec mems)]
         (record (mapv :id v))
-        {:status 200 :body {:tags tags :memories v}}))))
+        {:status 200 :body {:match match :memories v}}))))
 
 (defn- recall-by-ids-handler [conn cfg mem-writer req]
   (let [user   (:engram/user req)
@@ -180,14 +199,26 @@
   (let [kept (when cats (filterv (fn [[c _]] (cats c)) (:tags row)))]
     (if (seq kept) (assoc row :tags kept) (dissoc row :tags))))
 
+(defn- ->search-query
+  "Transform a search expression into Datalevin's native search query. A string
+  term and a {:phrase s} leaf pass through unchanged. A one-key :and/:or/:not map
+  becomes the [op ...] vector Datalevin parses. The fold is stack-safe, so a deep
+  expression never overflows."
+  [search]
+  (expr/transform
+   identity
+   (fn [op kids] (if (= :not op) [:not (first kids)] (into [op] kids)))
+   search))
+
 (defn- search-handler [conn req]
   (let [user (:engram/user req)
         {:keys [search limit categories]} (get-in req [:parameters :body])]
-    (if (str/blank? search)
+    (if (and (string? search) (str/blank? search))
       {:status 400 :body {:error "search must not be blank"}}
       (let [lim  (min 100 (or limit 20))
             cats (not-empty (set categories))
-            rows (mapv (partial project-tags cats) (memory/search conn user search lim))]
+            rows (mapv (partial project-tags cats)
+                       (memory/search conn user (->search-query search) lim))]
         {:status 200 :body {:results rows}}))))
 
 (defn- fetch-handler [conn cfg req]
@@ -265,28 +296,29 @@
 
 (defn- short-term-search-handler
   "Without a thought-process, aggregate across buckets as JSON: the per-bucket
-  counts, plus the number of matching notes when the body carries a search term.
-  With a thought-process, stream that bucket's notes as NDJSON: every note when
-  the body is empty, only the full-text matches when it carries a term. The search
-  term lives in the raw body, so an absent body reads as nil. A present blank term
-  is a 400."
+  counts, plus the number of matching notes when the body carries a search
+  expression. With a thought-process, stream that bucket's notes as NDJSON: every
+  note when the body is empty, only the matches when it carries an expression.
+  The search lives in the raw body, so an absent body reads as nil. The route
+  declares no body schema, so it validates the expression here. A present blank
+  string, or a malformed expression, is a 400."
   [conn req]
   (let [user    (:engram/user req)
         process (get-in req [:parameters :query :thought_process])
         raw     (get-in req [:body-params :search])]
-    ;; A present search must be a non-blank string. `or` short-circuits, so
-    ;; str/blank? never sees a non-string value.
-    (if (and (some? raw) (or (not (string? raw)) (str/blank? raw)))
-      {:status 400 :body {:error "search must not be blank"}}
-      (let [term (when (some? raw) raw)]
+    (if (and (some? raw)
+             (or (and (string? raw) (str/blank? raw))
+                 (not (schema/valid-search? raw))))
+      {:status 400 :body {:error "search must be a non-blank term or a valid expression"}}
+      (let [q (when (some? raw) (->search-query raw))]
         (cond
-          (and process term) (ndjson-response {:header true :thought-process process :search term}
-                                              (short-term/stream-matches conn user process term))
-          process            (ndjson-response {:header true :thought-process process}
-                                              (short-term/stream-bucket conn user process))
-          term               {:status 200 :body {:thought-processes (short-term/buckets conn user)
-                                                 :matches (short-term/match-count conn user term)}}
-          :else              {:status 200 :body {:thought-processes (short-term/buckets conn user)}})))))
+          (and process q) (ndjson-response {:header true :thought-process process :search raw}
+                                           (short-term/stream-matches conn user process q))
+          process         (ndjson-response {:header true :thought-process process}
+                                           (short-term/stream-bucket conn user process))
+          q               {:status 200 :body {:thought-processes (short-term/buckets conn user)
+                                              :matches (short-term/match-count conn user q)}}
+          :else           {:status 200 :body {:thought-processes (short-term/buckets conn user)}})))))
 
 (defn- routes
   "The reitit route table, closing over the db conn, the loaded config, and the
@@ -321,11 +353,12 @@
     ["/memories/batch" {:post {:parameters {:body schema/BatchBody}
                                :responses  {200 {:body schema/BatchOut} 422 {:body schema/BatchError}}
                                :handler (fn [req] (batch-handler conn cfg req))}}]
-    ;; A recall selects either by category:label pairs (by-tags) or by a list of
-    ;; ids (by-ids). No :responses: the NDJSON stream cannot be response-coerced
-    ;; (see schema/RecallOut). Both are static paths, resolving ahead of /memories/:id.
+    ;; A recall selects either by a match expression over category:label pairs
+    ;; (by-tags) or by a list of ids (by-ids). No :responses: the NDJSON stream
+    ;; cannot be response-coerced (see schema/RecallOut). Both are static paths,
+    ;; resolving ahead of /memories/:id.
     ["/memories/recall/by-tags" {:post {:parameters {:body schema/RecallByTagsBody}
-                                        :handler (fn [req] (recall-by-tags-handler conn cfg tag-writer mem-writer req))}}]
+                                        :handler (fn [req] (recall-by-match-handler conn cfg tag-writer mem-writer req))}}]
     ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
                                        :handler (fn [req] (recall-by-ids-handler conn cfg mem-writer req))}}]
     ;; Restamp a batch of the caller's memories as confirmed. Static path, so it

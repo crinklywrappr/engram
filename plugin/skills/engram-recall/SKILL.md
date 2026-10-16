@@ -31,7 +31,7 @@ Examples:
 ```bash
 ssh engram GET /config < /dev/null
 ssh engram GET /recalls < /dev/null
-echo '{"tags":[["domain","clojure"]]}' | ssh engram POST /memories/recall/by-tags
+echo '{"match":["domain","clojure"]}' | ssh engram POST /memories/recall/by-tags
 echo '{"search":"deploy to the pi","limit":20}' | ssh engram POST /memories/search
 echo '{"ids":["<uuid>"]}' | ssh engram POST /memories/recall/by-ids
 echo '{"content":"...","src":"...","tags":[["domain","clojure"]]}' | ssh engram POST /memories
@@ -129,9 +129,16 @@ Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
    many of your memories carry the pair. A pair you never recalled still appears,
    with a lifetime of 0 and a recent of 0.0. Use the count, the lifetime, and the
    recent value to choose the pairs worth loading.
-2. `POST /memories/recall/by-tags` with `{"tags": [["category","label"], ...]}`
-   returns the matching memories plus their related closure. Read every line after
-   the header line.
+2. `POST /memories/recall/by-tags` with `{"match": <expression>}` returns the
+   matching memories plus their related closure. Read every line after the header
+   line. A match expression is a nested boolean rule over category:label pairs. A
+   leaf is one pair, for example `["domain","clojure"]`. An operator is a one-key
+   object: `{"and": [ ... ]}`, `{"or": [ ... ]}`, or `{"not": <expression>}`. The
+   `and` and `or` operators take one or more children. The `not` operator takes
+   one child. A bare leaf is a whole expression, so `{"match": ["domain","clojure"]}`
+   recalls one pair. For any of several pairs, use `{"match": {"or": [["a","b"],
+   ["c","d"]]}}`. To exclude a pair, use `{"not": ["tech","sqlite"]}` inside an
+   `and`.
 
 ### Search, then recall by ids: the recovery path
 
@@ -140,7 +147,11 @@ find. This is a two-step path.
 
 1. `POST /memories/search` runs one ranked full-text query over content and src.
    The body is `{"search": "...", "limit": 20, "categories": ["domain"]}`. Only
-   `search` is required. `limit` defaults to 20 and caps at 100. A larger `limit`
+   `search` is required. The `search` value is a string or a boolean expression.
+   A string is the simple path. An expression nests `{"and": [ ... ]}`,
+   `{"or": [ ... ]}`, `{"not": <expression>}`, and a `{"phrase": "exact words"}`
+   leaf, for example `{"search": {"and": ["deploy", {"not": "staging"}]}}`.
+   `limit` defaults to 20 and caps at 100. A larger `limit`
    clamps to 100. The response is `{"results": [ ... ]}`, ranked by relevance.
    Each row carries `id`, `src`, `content`, and a `score`. A row carries `tags`
    only for the categories you name. A body that names no categories returns no

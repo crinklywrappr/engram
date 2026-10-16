@@ -43,6 +43,13 @@ _Avoid_: value, tag-value
 One tag on a memory: a category paired with a label, for example `domain:clojure`.
 The structural spelling "category:label pair" names the two parts.
 
+**Match expression**:
+A nested boolean rule that selects memories. It combines leaves with `and`, `or`,
+and `not`, to any depth. A leaf is a tag pair on the recall-by-tags route, or a
+search term on a search route. `and` and `or` take one or more children. `not`
+takes exactly one child. A bare leaf is a whole expression.
+_Avoid_: filter, query, where-clause, predicate
+
 **src**:
 The identity of the source a fact came from. Exactly one per memory. Facts split
 from one source share a src, and relations point at it.
@@ -52,6 +59,25 @@ _Avoid_: source-id, origin
 The set of other memories a fact links to, named by their src. A recall follows
 these links across hops.
 _Avoid_: links, references
+
+**Memory index**:
+The per-user set of index entries engram loads at session start. It orients a
+session before any recall. It is a curated map, not a derived count. Claude
+creates, reads, updates, and deletes its entries.
+_Avoid_: catalog, manifest, table-of-contents
+
+**Index entry**:
+One item in the memory index. It carries a kebab-case title, a free-text hook,
+and one or more requests. A request is a stored recall body of one kind: a
+by-tags match, a by-ids list, or a thought-process name. A required request is a
+liveness probe that keeps the entry alive.
+_Avoid_: bookmark, pointer, record
+
+**Lapse**:
+An index entry lapses once a required request returns no memory. engram removes a
+lapsed entry on the next index read. A lapse is a hard removal, apart from the
+decay that drives a memory's staleness.
+_Avoid_: expire, stale, evict
 
 **Configuration**:
 One acceptable set of category-to-cardinality rules. A memory that satisfies any

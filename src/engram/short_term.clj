@@ -154,29 +154,30 @@
           0 attrs))
 
 (defn- match-eids
-  "The eids of `user`'s short-term notes whose text matches `term`. The query
-  scopes the full-text hit to the :short-term/text attribute and to the caller's
-  own notes, so a Memory's content and another user's note never match. The :top
-  bound is the store's full-text document count, so no higher-ranked foreign
-  document truncates one of the caller's own matches before the scope clauses
-  apply. `attrs` is the set of full-text attributes, read from the connection's
-  schema."
-  [db attrs user term]
+  "The eids of `user`'s short-term notes that `query` matches. `query` is a
+  Datalevin search query: a term string, or a nested boolean expression (ticket
+  22), already transformed from the wire. The query scopes the full-text hit to
+  the :short-term/text attribute and to the caller's own notes, so a Memory's
+  content and another user's note never match. The :top bound is the store's
+  full-text document count, so no higher-ranked foreign document truncates one of
+  the caller's own matches before the scope clauses apply. `attrs` is the set of
+  full-text attributes, read from the connection's schema."
+  [db attrs user query]
   (set
    (d/q '[:find [?e ...]
           :in $ ?q ?opts ?u
           :where [(fulltext $ ?q ?opts) [[?e ?a ?v ?score]]]
                  [(= ?a :short-term/text)]
                  [?e :short-term/user ?u]]
-        db term {:display :refs+scores :top (max 1 (fulltext-doc-count db attrs))} user)))
+        db query {:display :refs+scores :top (max 1 (fulltext-doc-count db attrs))} user)))
 
 (defn- fulltext-attrs [conn] (search-config/fulltext-attrs (d/schema conn)))
 
 (defn match-count
-  "The number of `user`'s short-term notes whose text matches `term`, across every
-  thought-process."
-  [conn user term]
-  (count (match-eids (d/db conn) (fulltext-attrs conn) user term)))
+  "The number of `user`'s short-term notes that `query` matches, across every
+  thought-process. `query` is a Datalevin search query."
+  [conn user query]
+  (count (match-eids (d/db conn) (fulltext-attrs conn) user query)))
 
 (defn stream-bucket
   "A lazy seq of `user`'s wire notes under `process`, ordered by created time,
@@ -190,12 +191,12 @@
          (map ->wire))))
 
 (defn stream-matches
-  "A lazy seq of `user`'s wire notes under `process` whose text matches `term`,
-  ordered by created time, oldest first. Lazy over an immutable db snapshot, so
-  realize it while `conn` is open."
-  [conn user process term]
+  "A lazy seq of `user`'s wire notes under `process` that `query` matches, ordered
+  by created time, oldest first. `query` is a Datalevin search query. Lazy over an
+  immutable db snapshot, so realize it while `conn` is open."
+  [conn user process query]
   (let [db      (d/db conn)
-        matches (match-eids db (fulltext-attrs conn) user term)]
+        matches (match-eids db (fulltext-attrs conn) user query)]
     (->> (process-eids db user process)
          (filter matches)
          (map (fn [eid] (d/pull db pull-pattern eid)))

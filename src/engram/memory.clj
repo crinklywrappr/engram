@@ -10,6 +10,7 @@
             [clojure.set :as st]
             [engram.decay :as decay]
             [engram.errors :as errors]
+            [engram.expr :as expr]
             [engram.freshness :as freshness])
   (:import [java.util UUID Date]))
 
@@ -451,16 +452,6 @@
      (not-join [?e] [?e :memory/related _])
      [(ground :none) ?r]]])
 
-(defn- eids-by-tag [db user [category label]]
-  (d/q '[:find ?e (distinct ?r)
-         :in $ % ?u ?c ?l
-         :where [?e :memory/user ?u]
-                [?e :memory/tag ?t]
-                [?t :tag/category ?c]
-                [?t :tag/label ?l]
-                (related-or-none ?e ?r)]
-       db related-rules user category label))
-
 (defn- eids-by-srcs [db user srcs]
   (if (seq srcs)
     (d/q '[:find ?e (distinct ?r)
@@ -502,17 +493,61 @@
                               ;; :none is the no-related sentinel, never a real src
                               (disj frontier :none)]))))
 
-(defn recall-by-tags
-  "Return a lazy seq of wire memories: the tag matches for `user` plus the
-  transitive related-by-src closure, deduped. With a `half-life`, each wire
-  memory carries its freshness band; without one, the bare wire. Responses are
-  not truncated. The seq is lazy over an immutable db snapshot, so realize it
-  while `conn` is open."
-  [conn user tags half-life]
+;; ---------- match expression (ticket 22) ----------
+;;
+;; A match expression selects memories by a nested boolean rule over tag pairs.
+;; A leaf is a [category label] pair. :and, :or, and :not nest to any depth. The
+;; compiler turns the whole expression into one datalog query binding ?e to a
+;; matching memory, so the boolean algebra runs in the index, not in Clojure. Two
+;; rules carry correctness. The query leads with [?e :memory/user ?u], so ?e is
+;; bound before any not-join. Every or-join and not-join lists only [?e], so each
+;; leaf's tag var stays branch-local, and a fresh var per leaf keeps the leaves
+;; apart, because :memory/tag is cardinality-many.
+
+(defn- leaf-clauses [e [category label]]
+  (let [t (gensym "?t")]
+    [[e :memory/tag t] [t :tag/category category] [t :tag/label label]]))
+
+(defn- match->clauses
+  "Compile a match expression into :where clauses binding `e`. A leaf emits three
+  datoms through a fresh tag var. :and concatenates its children's clauses. :or
+  becomes an or-join over `e`, each child an (and ...) branch. :not becomes a
+  not-join over `e`. The fold is stack-safe (see engram.expr), so a deep
+  expression never overflows the compiler."
+  [e expr]
+  (expr/transform
+   (fn [leaf] (leaf-clauses e leaf))
+   (fn [op kids]
+     (case op
+       :and (vec (apply concat kids))
+       :or  [(list* 'or-join [e] (map #(cons 'and %) kids))]
+       :not [(list* 'not-join [e] (first kids))]))
+   expr))
+
+(defn- match-query
+  "The recall query for a match `expr`: bind ?e to the caller's matching
+  memories, then bind ?r to each related src through the shared rule, so the rows
+  feed `query` exactly as the per-tag lookups did."
+  [expr]
+  (vec (concat '[:find ?e (distinct ?r)
+                 :in $ % ?u
+                 :where [?e :memory/user ?u]]
+               (match->clauses '?e expr)
+               '[(related-or-none ?e ?r)])))
+
+(defn recall-by-match
+  "Return a lazy seq of wire memories: the memories matching `expr` for `user`
+  plus the transitive related-by-src closure, deduped. `expr` is a nested match
+  expression, a [category label] leaf or an {:and/:or/:not ...} node. One compiled
+  datalog query seeds the match set, and the related closure walk is the same as
+  every other recall. With a `half-life`, each wire memory carries its freshness
+  band. Responses are not truncated. The seq is lazy over an immutable db
+  snapshot, so realize it while `conn` is open."
+  [conn user expr half-life]
   (let [db   (d/db conn)
         band (band-for half-life)
-        f    (partial eids-by-tag db user)]
-    (query db user band #{} [] #{} (map (partial vector f) tags))))
+        rows (d/q (match-query expr) db related-rules user)]
+    (query db user band #{} (seq rows) #{} [])))
 
 (defn- eids-by-ids [db user ids]
   (if (seq ids)

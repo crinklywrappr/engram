@@ -4,7 +4,8 @@
   Request schemas are validated by malli coercion, so a malformed shape returns
   400. Response schemas are coerced too, and coercion strips any key a schema does
   not name, so each response schema names every key its body must keep."
-  (:require [engram.config :as config]))
+  (:require [engram.config :as config]
+            [malli.core :as m]))
 
 ;; ---------- request schemas (the static shape; malli coercion -> 400) ----------
 
@@ -22,8 +23,41 @@
    [:tags {:optional true} [:vector config/Pair]]
    [:related {:optional true} [:vector config/Token]]])
 
+;; A match expression (ticket 22): a nested boolean rule over tag pairs. A leaf
+;; is a [category label] pair. :and and :or take one or more children. :not takes
+;; exactly one child. The recursive shape is a malli registry ref, so coercion
+;; rejects a malformed expression (a zero-arg :and, a multi-child :not, a stray
+;; key) with 400. Each operator map is closed, so it carries exactly one key.
+(def Match
+  [:schema {:registry {::m [:or
+                            config/Pair
+                            [:map {:closed true} [:and [:vector {:min 1} [:ref ::m]]]]
+                            [:map {:closed true} [:or  [:vector {:min 1} [:ref ::m]]]]
+                            [:map {:closed true} [:not [:ref ::m]]]]}}
+   [:ref ::m]])
+
 (def RecallByTagsBody
-  [:map [:tags [:vector config/Pair]]])
+  [:map [:match Match]])
+
+;; A search expression (ticket 22): the full-text analogue of a match expression.
+;; A leaf is a non-empty term string or a {:phrase "..."} object. :and, :or, and
+;; :not nest to any depth, mapping onto Datalevin's native search grammar. A bare
+;; string is a whole expression, the simple search path.
+(def SearchExpr
+  [:schema {:registry {::s [:or
+                            [:string {:min 1}]
+                            [:map {:closed true} [:phrase [:string {:min 1}]]]
+                            [:map {:closed true} [:and [:vector {:min 1} [:ref ::s]]]]
+                            [:map {:closed true} [:or  [:vector {:min 1} [:ref ::s]]]]
+                            [:map {:closed true} [:not [:ref ::s]]]]}}
+   [:ref ::s]])
+
+(defn valid-search?
+  "True when `x` is a well-formed search expression. The short-term search route
+  reads an optional raw body, so it validates programmatically rather than by
+  coercion."
+  [x]
+  (m/validate SearchExpr x))
 
 ;; /memories/search request. The search string is required and non-empty, so a
 ;; missing or empty value coerces to 400. The handler also rejects a blank
@@ -32,7 +66,7 @@
 ;; categories. A categories entry is a bare category string, not a pair.
 (def SearchBody
   [:map
-   [:search [:string {:min 1}]]
+   [:search SearchExpr]
    [:limit {:optional true} [:int {:min 1}]]
    [:categories {:optional true} [:vector :string]]])
 
