@@ -39,16 +39,16 @@ The Clojure fold over per-leaf entity-id sets is the fallback. engram picks it o
 
 **Blocked by:** 11 (search scope) and 11a (the `/memories/recall/by-tags` rename) are done. The grill and the recall-by-tags research are both resolved. Nothing gates implementation.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A grilling resolved the recall request shape, the degenerate cases, and the operator arity, before any code.
 - [x] A research pass settled the server evaluation: one compiled datalog query over the tag pairs, feeding the related closure unchanged.
-- [ ] `/memories/recall/by-tags` takes the expression under `:match`, replacing the flat `:tags` body.
-- [ ] The server compiles the `:match` expression into one datalog query: a fresh tag var per leaf, `or-join [?e]`, `not-join [?e]`, and a lead `[?e :memory/user ?u]` clause.
-- [ ] `/memories/recall/by-tags` matches memories against a nested `and`/`or`/`not` expression over tag pairs.
-- [ ] `and` is intersection, `or` is union, and `not` is set difference within the caller's own memories.
-- [ ] The recall response stays the NDJSON stream and follows the related closure.
-- [ ] `/memories/search` and `/memories/short-term/search` take a string or a match expression under `:search`.
-- [ ] The search leaf is a term string or a `{"phrase": "..."}` object, over Datalevin's native grammar.
-- [ ] A zero-argument `and` or `or`, a malformed `not`, a missing `:match`, and an empty `:search` string all return 400.
-- [ ] The `engram-recall` skill, the skills that post these bodies, and the tests all move to the new shape.
+- [x] `/memories/recall/by-tags` takes the expression under `:match`, replacing the flat `:tags` body.
+- [x] The server compiles the `:match` expression into one datalog query: a fresh tag var per leaf, `or-join [?e]`, `not-join [?e]`, and a lead `[?e :memory/user ?u]` clause.
+- [x] `/memories/recall/by-tags` matches memories against a nested `and`/`or`/`not` expression over tag pairs.
+- [x] `and` is intersection, `or` is union, and `not` is set difference within the caller's own memories.
+- [x] The recall response stays the NDJSON stream and follows the related closure.
+- [x] `/memories/search` and `/memories/short-term/search` take a string or a match expression under `:search`.
+- [x] The search leaf is a term string or a `{"phrase": "..."}` object, over Datalevin's native grammar.
+- [x] A zero-argument `and` or `or`, a malformed `not`, a missing `:match`, and an empty `:search` string all return 400.
+- [x] The `engram-recall` skill, the skills that post these bodies, and the tests all move to the new shape.

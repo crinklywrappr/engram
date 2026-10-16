@@ -22,5 +22,13 @@
          :main-opts ["-m" "cognitect.test-runner" "--exclude" "generative"]
          :exec-fn cognitect.test-runner.api/test
          :exec-args {:excludes [:generative]}}
+  ;; Run only the :generative specs, for the release gate and for dev iteration
+  ;; on them. `clojure -M:test-generative`.
+  :test-generative {:extra-paths ["test"]
+                    :extra-deps {org.clojure/test.check               {:mvn/version "1.1.3"}
+                                 io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                    :jvm-opts  ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+                                "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
+                    :main-opts ["-m" "cognitect.test-runner" "--include" "generative"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
           :ns-default build}}}
