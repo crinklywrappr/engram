@@ -17,7 +17,10 @@
                       io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :jvm-opts  ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                      "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
-         :main-opts ["-m" "cognitect.test-runner"]
-         :exec-fn cognitect.test-runner.api/test}
+         ;; The dev run excludes the slow :generative specs. The release gate runs
+         ;; the whole suite through build.clj, so it runs them there.
+         :main-opts ["-m" "cognitect.test-runner" "--exclude" "generative"]
+         :exec-fn cognitect.test-runner.api/test
+         :exec-args {:excludes [:generative]}}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
           :ns-default build}}}
