@@ -5,13 +5,13 @@
   An index entry is one item in the memory index, which a session loads whole at
   session start. It carries an id, the owning user, a kebab-case title, a
   free-text hook, and one or more requests. A request is a stored recall body of
-  one of three kinds: a by-tags match expression, a by-ids list, or a
+  one of three kinds: a by-tags match expression, a by-src list, or a
   thought-process name. Each request carries a required? flag.
 
   A required request is a liveness probe. An entry lapses once any one required
   request returns no memory, and `read-live!` reaps the lapsed entries. A probe
   runs in existence mode: it reuses the recall-side existence helpers
-  (`memory/any-match?`, `memory/resolves-any?`, `short-term/bucket-has-note?`), so
+  (`memory/any-match?`, `memory/owns-any-src?`, `short-term/bucket-has-note?`), so
   the probe and the full recall can never disagree about what a request yields.
 
   Reads and writes always filter by user, so one user never sees another's index.
@@ -148,7 +148,7 @@
   (let [payload (parse-payload (:index.request/payload r))]
     (case (:index.request/kind r)
       "by-tags"         (memory/any-match? db user payload)
-      "by-ids"          (memory/resolves-any? db user payload)
+      "by-src"          (memory/owns-any-src? db user payload)
       "thought-process" (short-term/bucket-has-note? db user payload)
       ;; The write schema (schema/IndexRequest) admits only the three kinds
       ;; above, so an unknown kind can only come from corrupted stored data. The

@@ -249,6 +249,8 @@
              (remove skip-self)
              (mapcat replace-fn))))))
 
+;; ---------- read-dependent writes (atomic plan and commit) ----------
+
 ;; The planning for a read-dependent write runs inside a `:db.fn/call` transaction
 ;; function, so the read and the commit are one atomic unit under the connection
 ;; write lock. The function sees the committed db at commit time, so a concurrent
@@ -561,18 +563,7 @@
                            (match->clauses '?e expr)))
               db user)))
 
-(defn resolves-any?
-  "True when at least one of `ids` resolves to a memory `user` owns. The
-  existence-mode counterpart to `recall-by-ids`: an indexed point lookup on
-  `:memory/id`, joined to the caller. An empty `ids` resolves nothing. `ids` are
-  uuid strings. Takes a `db` value, so it can run inside a transaction function."
-  [db user ids]
-  (boolean
-   (when (seq ids)
-     (seq (d/q '[:find [?e ...]
-                 :in $ ?u [?id ...]
-                 :where [?e :memory/id ?id] [?e :memory/user ?u]]
-               db user (mapv #(UUID/fromString %) ids))))))
+;; ---------- recall by ids and by src ----------
 
 (defn- eids-by-ids [db user ids]
   (if (seq ids)
@@ -598,6 +589,34 @@
         uuids (mapv #(UUID/fromString %) ids)
         f     (partial eids-by-ids db user)]
     (query db user band #{} [] #{} [[f uuids]])))
+
+(defn recall-by-src
+  "Return a lazy seq of wire memories: the memories `user` owns under any of
+  `srcs` plus the transitive related-by-src closure, deduped. A src selects every
+  fact under that source name. A src the caller does not own contributes nothing,
+  because the seed joins on the caller's user. An empty `srcs` selects nothing.
+  Responses are not truncated. Each wire memory carries its freshness band. The
+  seq is lazy over an immutable db snapshot, so realize it while `conn` is open.
+  It seeds from `eids-by-srcs`, the same lookup the related closure walks, so a
+  src recall and the walk agree by construction."
+  [conn user srcs half-life]
+  (let [db   (d/db conn)
+        band (band-for half-life)
+        f    (partial eids-by-srcs db user)]
+    (query db user band #{} [] #{} [[f (vec srcs)]])))
+
+(defn owns-any-src?
+  "True when `user` owns at least one memory whose src is in `srcs`. The
+  existence-mode counterpart to `recall-by-src`: an indexed lookup on
+  `:memory/src`, joined to the caller. An empty `srcs` owns nothing. Takes a `db`
+  value, so it can run inside a transaction function against the commit-time db."
+  [db user srcs]
+  (boolean
+   (when (seq srcs)
+     (seq (d/q '[:find [?e ...]
+                 :in $ ?u [?s ...]
+                 :where [?e :memory/src ?s] [?e :memory/user ?u]]
+               db user (vec srcs))))))
 
 ;; ---------- list all ----------
 

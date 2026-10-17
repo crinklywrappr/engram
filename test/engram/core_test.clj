@@ -954,6 +954,54 @@
                                         {:accept "application/json" :body {:ids [a]}}))))))
       (finally (d/close conn)))))
 
+(deftest handler-recall-by-src-route
+  (let [conn (fresh-conn)
+        app  (test-app conn)]
+    (try
+      (request app :post "/memories"
+               {:user "alice" :accept "application/json"
+                :body {:content "fact a" :src "a" :tags [["domain" "clojure"]] :related ["b"]}})
+      (request app :post "/memories"
+               {:user "alice" :accept "application/json"
+                :body {:content "fact b" :src "b" :tags [["domain" "clojure"]]}})
+      (request app :post "/memories"
+               {:user "bob" :accept "application/json"
+                :body {:content "bob secret" :src "z" :tags [["domain" "clojure"]]}})
+      (testing "the src recall streams NDJSON with the matches and their closure"
+        (let [resp  (request app :post "/memories/recall/by-src"
+                             {:user "alice" :accept "application/x-ndjson" :body {:srcs ["a"]}})
+              lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))
+              mems  (map #(json/read-value % json/keyword-keys-object-mapper) (rest lines))]
+          (is (= "application/x-ndjson" (get-in resp [:headers "Content-Type"])))
+          (is (true? (:header (json/read-value (first lines) json/keyword-keys-object-mapper))))
+          (is (= #{"a" "b"} (set (map :src mems))))
+          (testing "a row carries no score"
+            (is (not-any? :score mems)))))
+      (testing "the JSON fallback carries the selected memories and their closure"
+        (let [body (body-json (request app :post "/memories/recall/by-src"
+                                        {:user "alice" :accept "application/json" :body {:srcs ["a"]}}))]
+          (is (vector? (:memories body)))
+          (is (= #{"a" "b"} (set (map :src (:memories body)))))
+          (is (= ["a"] (:srcs body)))))
+      (testing "a foreign src is skipped silently, so nothing matches"
+        (let [body (body-json (request app :post "/memories/recall/by-src"
+                                        {:user "alice" :accept "application/json" :body {:srcs ["z"]}}))]
+          (is (empty? (:memories body)))))
+      (testing "an empty srcs list returns a 200 with a header-only stream"
+        (let [resp  (request app :post "/memories/recall/by-src"
+                             {:user "alice" :accept "application/x-ndjson" :body {:srcs []}})
+              lines (->> (slurp (:body resp)) str/split-lines (remove str/blank?))]
+          (is (== 200 (:status resp)))
+          (is (= 1 (count lines)))))
+      (testing "a non-token src is a 400 at coercion"
+        (is (== 400 (:status (request app :post "/memories/recall/by-src"
+                                      {:user "alice" :accept "application/json"
+                                       :body {:srcs ["Bad-Src"]}})))))
+      (testing "a request without the user header is rejected"
+        (is (== 401 (:status (request app :post "/memories/recall/by-src"
+                                      {:accept "application/json" :body {:srcs ["a"]}})))))
+      (finally (d/close conn)))))
+
 (deftest handler-memories-streams-all
   ;; GET /memories streams every memory the caller owns over NDJSON: the header
   ;; line plus one line per memory, with nothing dropped and no other user's rows.
@@ -2428,13 +2476,13 @@
         (short-term/create! conn "alice" "engram-work" "a staged note")
         (request app :post "/index"
                  {:user "alice" :accept "application/json"
-                  :body {:title "by-ids-entry" :hook "probes an id"
-                         :requests [{:kind "by-ids" :payload [mem] :required true}]}})
+                  :body {:title "by-src-entry" :hook "probes a source"
+                         :requests [{:kind "by-src" :payload ["s1"] :required true}]}})
         (request app :post "/index"
                  {:user "alice" :accept "application/json"
                   :body {:title "process-entry" :hook "probes a bucket"
                          :requests [{:kind "thought-process" :payload "engram-work" :required true}]}})
-        (testing "a by-ids and a thought-process required request both live when their target exists"
+        (testing "a by-src and a thought-process required request both live when their target exists"
           (is (= 2 (count (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
         (request app :delete (str "/memories/" mem) {:user "alice" :accept "application/json"})
         (short-term/wipe! conn "alice" "engram-work")
@@ -2446,17 +2494,19 @@
   (let [conn (fresh-conn)]
     (try
       (memory/create! conn "alice" {:content "a" :src "s1" :tags [["domain" "clojure"]]})
-      (let [mem (memory/create! conn "alice" {:content "b" :src "s2" :tags [["tech" "datalevin"]]})
-            db  (d/db conn)]
+      (memory/create! conn "alice" {:content "b" :src "s2" :tags [["tech" "datalevin"]]})
+      (let [db (d/db conn)]
         (testing "any-match? is existence over the match compiler"
           (is (true?  (memory/any-match? db "alice" ["domain" "clojure"])))
           (is (false? (memory/any-match? db "alice" ["domain" "web"])))
           (is (true?  (memory/any-match? db "alice" {:or [["domain" "web"] ["tech" "datalevin"]]})))
           (is (false? (memory/any-match? db "bob"   ["domain" "clojure"]))))
-        (testing "resolves-any? is existence over the caller's own ids"
-          (is (true?  (memory/resolves-any? db "alice" [mem])))
-          (is (false? (memory/resolves-any? db "bob"   [mem])))
-          (is (false? (memory/resolves-any? db "alice" []))))
+        (testing "owns-any-src? is existence over the caller's own sources"
+          (is (true?  (memory/owns-any-src? db "alice" ["s1"])))
+          (is (true?  (memory/owns-any-src? db "alice" ["s2"])))
+          (is (false? (memory/owns-any-src? db "alice" ["absent-src"])))
+          (is (false? (memory/owns-any-src? db "bob"   ["s1"])))
+          (is (false? (memory/owns-any-src? db "alice" []))))
         (testing "bucket-has-note? is existence over a thought-process"
           (short-term/create! conn "alice" "engram-work" "note")
           (is (true?  (memory/any-match? (d/db conn) "alice" ["domain" "clojure"]))) ; sanity on fresh db

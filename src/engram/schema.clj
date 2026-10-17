@@ -81,6 +81,12 @@
 (def RecallByIdsBody
   [:map [:ids [:vector IdStr]]])
 
+;; /memories/recall/by-src request. A recall selected by a list of source names.
+;; Each src is a kebab-case token, so a non-token src is a 400 at coercion. An
+;; empty vector is well-formed and selects nothing.
+(def RecallBySrcBody
+  [:map [:srcs [:vector config/Token]]])
+
 ;; /memories/confirm request. A batch of memory ids to restamp as confirmed.
 ;; Each id is the IdStr form, so a non-uuid id is a 400 at coercion. An empty
 ;; vector is well-formed and stamps nothing.
@@ -116,21 +122,23 @@
    [:update {:optional true} [:vector UpdatePayload]]
    [:delete {:optional true} [:vector IdStr]]])
 
-;; An index entry request (ticket 25): one stored recall body, tagged by kind. A
-;; by-tags request carries a Match expression, a by-ids request a list of ids, and
-;; a thought-process request a kebab-case process name. The payload shape is
-;; validated per kind by a :multi dispatch, so a by-ids payload under a by-tags
-;; kind coerces to 400. The required? flag is optional and defaults to false in
-;; the handler. Each branch map is closed, so a stray key is a 400.
+;; An index entry request (ticket 25, amended by 25b): one stored recall body,
+;; tagged by kind. A by-tags request carries a Match expression, a by-src request
+;; a list of source names, and a thought-process request a kebab-case process
+;; name. The payload shape is validated per kind by a :multi dispatch, so a by-src
+;; payload under a by-tags kind coerces to 400. The required? flag is optional and
+;; defaults to false in the handler. Each branch map is closed, so a stray key is
+;; a 400. The index carries no by-ids request: a migrated or curated source is
+;; named by src, which by-src pins without a search.
 (def IndexRequest
   [:multi {:dispatch :kind}
    ["by-tags"         [:map {:closed true}
                        [:kind [:= "by-tags"]]
                        [:payload Match]
                        [:required {:optional true} :boolean]]]
-   ["by-ids"          [:map {:closed true}
-                       [:kind [:= "by-ids"]]
-                       [:payload [:vector IdStr]]
+   ["by-src"          [:map {:closed true}
+                       [:kind [:= "by-src"]]
+                       [:payload [:vector config/Token]]
                        [:required {:optional true} :boolean]]]
    ["thought-process" [:map {:closed true}
                        [:kind [:= "thought-process"]]
@@ -220,7 +228,7 @@
 ;; by kind, so :payload is :any. :required is always present on the wire.
 (def IndexRequestOut
   [:map
-   [:kind [:enum "by-tags" "by-ids" "thought-process"]]
+   [:kind [:enum "by-tags" "by-src" "thought-process"]]
    [:payload :any]
    [:required :boolean]])
 (def IndexEntryOut

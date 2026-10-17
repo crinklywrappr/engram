@@ -69,8 +69,8 @@ _Avoid_: catalog, manifest, table-of-contents
 **Index entry**:
 One item in the memory index. It carries a kebab-case title, a free-text hook,
 and one or more requests. A request is a stored recall body of one kind: a
-by-tags match, a by-ids list, or a thought-process name. A required request is a
-liveness probe that keeps the entry alive.
+by-tags match, a by-src list of source names, or a thought-process name. A
+required request is a liveness probe that keeps the entry alive.
 _Avoid_: bookmark, pointer, record
 
 **Lapse**:

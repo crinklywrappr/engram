@@ -106,6 +106,17 @@
         (record (mapv :id v))
         {:status 200 :body {:ids ids :memories v}}))))
 
+(defn- recall-by-src-handler [conn cfg mem-writer req]
+  (let [user   (:engram/user req)
+        srcs   (get-in req [:parameters :body :srcs])
+        mems   (memory/recall-by-src conn user srcs (:freshness-half-life-days cfg))
+        record (fn [rids] (rc-writer/record-memories! mem-writer user rids))]
+    (if (wants-ndjson? req)
+      (ndjson-response {:header true :srcs srcs} mems record)
+      (let [v (vec mems)]
+        (record (mapv :id v))
+        {:status 200 :body {:srcs srcs :memories v}}))))
+
 (defn- memories-handler [conn cfg req]
   (let [user (:engram/user req)]
     (ndjson-response {:header true}
@@ -406,6 +417,12 @@
                                         :handler (fn [req] (recall-by-match-handler conn cfg tag-writer mem-writer req))}}]
     ["/memories/recall/by-ids" {:post {:parameters {:body schema/RecallByIdsBody}
                                        :handler (fn [req] (recall-by-ids-handler conn cfg mem-writer req))}}]
+    ;; Recall by source name, the index's pinning mechanism. Selects every fact
+    ;; under the named srcs plus the related closure, like by-ids but keyed on
+    ;; src. No :responses: NDJSON stream. Static path, resolves ahead of
+    ;; /memories/:id.
+    ["/memories/recall/by-src" {:post {:parameters {:body schema/RecallBySrcBody}
+                                       :handler (fn [req] (recall-by-src-handler conn cfg mem-writer req))}}]
     ;; Restamp a batch of the caller's memories as confirmed. Static path, so it
     ;; resolves ahead of /memories/:id.
     ["/memories/confirm" {:post {:parameters {:body schema/ConfirmBody}

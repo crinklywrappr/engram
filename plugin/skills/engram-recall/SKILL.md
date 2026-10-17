@@ -75,8 +75,8 @@ requests as normal recall calls. A request names how to load its memories:
 
 - A `by-tags` request carries a match expression. Send it as `{"match":
   <payload>}` to `POST /memories/recall/by-tags`.
-- A `by-ids` request carries a list of ids. Send it as `{"ids": <payload>}` to
-  `POST /memories/recall/by-ids`.
+- A `by-src` request carries a list of source names. Send it as `{"srcs":
+  <payload>}` to `POST /memories/recall/by-src`.
 - A `thought-process` request carries a bucket name. Load it from `POST
   /memories/short-term/search?thought_process=<payload>`.
 
@@ -194,6 +194,14 @@ find. This is a two-step path.
    memories in full plus their related closure, as the same NDJSON stream. A
    row carries no score. An id that is not yours, or does not exist, is skipped.
    An empty `ids` list returns a header line and no memories.
+
+### Recall by source
+
+`POST /memories/recall/by-src` with `{"srcs": ["<name>", ...]}` loads every memory
+under those source names, plus their related closure, as the same NDJSON stream.
+A src names a source, so one src loads every atomic fact split from it. A src that
+is not yours contributes nothing. An empty `srcs` list returns a header line and
+no memories. The index uses this call to pin a source by name.
 
 ## Store a fact
 
