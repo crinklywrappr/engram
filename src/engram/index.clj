@@ -22,6 +22,7 @@
   transaction. The payload stores as an opaque JSON string, so an arbitrary-depth
   match tree needs no shredding into datoms."
   (:require [datalevin.core :as d]
+            [engram.batch :as batch]
             [engram.memory :as memory]
             [engram.short-term :as short-term]
             [jsonista.core :as json])
@@ -109,6 +110,18 @@
     (catch clojure.lang.ExceptionInfo e
       (if (::absent (ex-data e)) nil (throw e)))))
 
+(defn- replace-tx
+  "Tx-data that replaces entry `eid` with `entry` in place: retract the old request
+  components, then set the new title, hook, and requests. The single build path for
+  a full-replace update, shared by the single route and the batch."
+  [db eid {:keys [title hook requests]}]
+  (let [old-reqs (d/q '[:find [?r ...] :in $ ?e :where [?e :index/request ?r]] db eid)]
+    (conj (mapv (fn [r] [:db/retractEntity r]) old-reqs)
+          {:db/id         eid
+           :index/title   title
+           :index/hook    hook
+           :index/request (mapv request-tx requests)})))
+
 (defn replace!
   "Replace the entry at `id` for `user`, keeping the id. Retract the old request
   components and set the new title, hook, and requests in place. The resolve and
@@ -118,13 +131,7 @@
   (commit-plan! conn id
                 (fn [db]
                   (if-let [eid (eid-of db user id)]
-                    (let [old-reqs (d/q '[:find [?r ...] :in $ ?e :where [?e :index/request ?r]] db eid)
-                          {:keys [title hook requests]} entry]
-                      (conj (mapv (fn [r] [:db/retractEntity r]) old-reqs)
-                            {:db/id         eid
-                             :index/title   title
-                             :index/hook    hook
-                             :index/request (mapv request-tx requests)}))
+                    (replace-tx db eid entry)
                     (absent!)))))
 
 (defn delete!
@@ -137,6 +144,22 @@
                   (if-let [eid (eid-of db user id)]
                     [[:db/retractEntity eid]]
                     (absent!)))))
+
+;; ---------- batch ----------
+
+(defn apply-batch!
+  "Apply a grouped batch of index operations for one user in one atomic
+  transaction (see engram.batch). A create mints its id. An update is a full
+  replace, retracting the old requests and setting the new body. A delete retracts
+  the entry and its request components. Return {:ok? true :ids [...] :applied n} on
+  success, or {:ok? false :errors [...]} on failure."
+  [conn user batch]
+  (batch/apply! conn batch
+                (fn [db]
+                  {:resolve   (fn [id] (eid-of db user id))
+                   :create-tx (fn [id p] (entry-tx user id p))
+                   :update-tx (fn [eid p] (replace-tx db eid p))
+                   :delete-tx (fn [eid] [[:db/retractEntity eid]])})))
 
 ;; ---------- liveness probe and reap ----------
 

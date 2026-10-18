@@ -2513,3 +2513,195 @@
           (is (true?  (short-term/bucket-has-note? (d/db conn) "alice" "engram-work")))
           (is (false? (short-term/bucket-has-note? (d/db conn) "alice" "absent-bucket")))))
       (finally (d/close conn)))))
+
+;; ---------- short-term batch (ticket 25c) ----------
+
+(deftest short-term-batch-crud
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a    (short-term/create! conn "alice" "proc" "a text")
+            b    (short-term/create! conn "alice" "proc" "b text")
+            resp (request app :post "/memories/short-term/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:create [{:thought-process "proc" :text "c text"}]
+                                  :update [{:id a :text "a edited"}]
+                                  :delete [b]}})
+            body (body-json resp)]
+        (testing "a mixed batch returns 200 with one new id and the applied count"
+          (is (== 200 (:status resp)))
+          (is (= 1 (count (:ids body))))
+          (is (= 3 (:applied body))))
+        (testing "the update, the delete, and the create all applied"
+          (is (= "a edited" (:text (short-term/fetch conn "alice" a))))
+          (is (nil? (short-term/fetch conn "alice" b)))
+          (is (= 2 (get (short-term/buckets conn "alice") "proc")))))
+      (finally (d/close conn)))))
+
+(deftest short-term-batch-conflict-rejects
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a    (short-term/create! conn "alice" "proc" "a")
+            resp (request app :post "/memories/short-term/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:update [{:id a :text "x"}] :delete [a]}})
+            body (body-json resp)]
+        (is (== 422 (:status resp)))
+        (is (some #(= "conflict" (:error %)) (:errors body)))
+        (testing "nothing was written"
+          (is (= "a" (:text (short-term/fetch conn "alice" a))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-batch-duplicate-update-id-rejects
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a    (short-term/create! conn "alice" "proc" "a")
+            resp (request app :post "/memories/short-term/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:update [{:id a :text "x"} {:id a :text "y"}]}})
+            errs (:errors (body-json resp))
+            dups (filter #(= "duplicate-id" (:error %)) errs)]
+        (is (== 422 (:status resp)))
+        (testing "every occurrence of the duplicated id is flagged, by index"
+          (is (= 2 (count dups)))
+          (is (= #{0 1} (set (map :i dups)))))
+        (testing "nothing was written"
+          (is (= "a" (:text (short-term/fetch conn "alice" a))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-batch-not-found-and-isolation
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a     (short-term/create! conn "bob" "proc" "bob's")
+            ghost (str (java.util.UUID/randomUUID))
+            resp  (request app :post "/memories/short-term/batch"
+                           {:user "alice" :accept "application/json"
+                            :body {:update [{:id a :text "x"}] :delete [ghost]}})
+            errs  (:errors (body-json resp))]
+        (is (== 422 (:status resp)))
+        (testing "a foreign note id and an unknown id both report not-found"
+          (is (= 2 (count (filter #(= "not-found" (:error %)) errs)))))
+        (testing "the other user's note is untouched"
+          (is (= "bob's" (:text (short-term/fetch conn "bob" a))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-batch-delete-dedups
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a    (short-term/create! conn "alice" "proc" "a")
+            resp (request app :post "/memories/short-term/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:delete [a a]}})
+            body (body-json resp)]
+        (is (== 200 (:status resp)))
+        (testing "a repeated delete counts once and removes the note"
+          (is (= 1 (:applied body)))
+          (is (nil? (short-term/fetch conn "alice" a)))))
+      (finally (d/close conn)))))
+
+;; ---------- index batch (ticket 25d) ----------
+
+(deftest index-batch-crud
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [mk   (fn [title] (:id (body-json (request app :post "/index"
+                                              {:user "alice" :accept "application/json"
+                                               :body {:title title :hook "h"
+                                                      :requests [{:kind "by-src" :payload ["s1"]}]}}))))
+            a    (mk "alpha")
+            b    (mk "beta")
+            resp (request app :post "/index/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:create [{:title "gamma" :hook "g"
+                                            :requests [{:kind "by-tags" :payload ["domain" "clojure"]}]}]
+                                  :update [{:id a :title "alpha-2" :hook "h2"
+                                            :requests [{:kind "thought-process" :payload "proc" :required false}]}]
+                                  :delete [b]}})
+            body (body-json resp)]
+        (testing "a mixed batch returns 200 with one new id and the applied count"
+          (is (== 200 (:status resp)))
+          (is (= 1 (count (:ids body))))
+          (is (= 3 (:applied body))))
+        (let [entries  (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))
+              by-title (into {} (map (juxt :title identity)) entries)]
+          (testing "create added gamma, update replaced alpha in place, delete removed beta"
+            (is (= #{"alpha-2" "gamma"} (set (keys by-title))))
+            (is (= [{:kind "thought-process" :payload "proc" :required false}]
+                   (:requests (by-title "alpha-2")))))))
+      (finally (d/close conn)))))
+
+(deftest index-batch-rejects-bad-ids
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a   (:id (body-json (request app :post "/index"
+                                 {:user "alice" :accept "application/json"
+                                  :body {:title "alpha" :hook "h"
+                                         :requests [{:kind "by-src" :payload ["s1"]}]}})))
+            upd (fn [id] {:id id :title "x" :hook "h" :requests [{:kind "by-src" :payload ["s1"]}]})]
+        (testing "an id in both update and delete is a conflict"
+          (let [resp (request app :post "/index/batch"
+                              {:user "alice" :accept "application/json"
+                               :body {:update [(upd a)] :delete [a]}})]
+            (is (== 422 (:status resp)))
+            (is (some #(= "conflict" (:error %)) (:errors (body-json resp))))))
+        (testing "a repeated update id is a duplicate-id on every occurrence"
+          (let [resp (request app :post "/index/batch"
+                              {:user "alice" :accept "application/json"
+                               :body {:update [(upd a) (upd a)]}})
+                errs (:errors (body-json resp))]
+            (is (== 422 (:status resp)))
+            (is (= #{0 1} (set (map :i (filter #(= "duplicate-id" (:error %)) errs)))))))
+        (testing "the entry is untouched after the rejected batches"
+          (let [entries (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))]
+            (is (= ["alpha"] (map :title entries))))))
+      (finally (d/close conn)))))
+
+(deftest short-term-batch-conflict-beats-duplicate-id
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a     (short-term/create! conn "alice" "proc" "a")
+            resp  (request app :post "/memories/short-term/batch"
+                           {:user "alice" :accept "application/json"
+                            :body {:update [{:id a :text "x"} {:id a :text "y"}] :delete [a]}})
+            codes (->> (:errors (body-json resp))
+                       (filter #(= "update" (:op %)))
+                       (map :error)
+                       set)]
+        (is (== 422 (:status resp)))
+        (testing "an id both repeated in update and present in delete reports conflict, not duplicate-id"
+          (is (= #{"conflict"} codes))))
+      (finally (d/close conn)))))
+
+(deftest index-batch-not-found-and-isolation
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a     (:id (body-json (request app :post "/index"
+                        {:user "bob" :accept "application/json"
+                         :body {:title "bobs" :hook "h" :requests [{:kind "by-src" :payload ["s1"]}]}})))
+            ghost (str (java.util.UUID/randomUUID))
+            upd   {:id a :title "x" :hook "h" :requests [{:kind "by-src" :payload ["s1"]}]}
+            resp  (request app :post "/index/batch"
+                           {:user "alice" :accept "application/json"
+                            :body {:update [upd] :delete [ghost]}})
+            errs  (:errors (body-json resp))]
+        (is (== 422 (:status resp)))
+        (testing "a foreign entry id and an unknown id both report not-found"
+          (is (= 2 (count (filter #(= "not-found" (:error %)) errs)))))
+        (testing "the other user's entry is untouched"
+          (is (= ["bobs"] (map :title (index-entry (request app :get "/index" {:user "bob" :accept "application/json"})))))))
+      (finally (d/close conn)))))
+
+(deftest index-batch-delete-dedups
+  (let [conn (fresh-conn) app (test-app conn)]
+    (try
+      (let [a    (:id (body-json (request app :post "/index"
+                       {:user "alice" :accept "application/json"
+                        :body {:title "alpha" :hook "h" :requests [{:kind "by-src" :payload ["s1"]}]}})))
+            resp (request app :post "/index/batch"
+                          {:user "alice" :accept "application/json"
+                           :body {:delete [a a]}})
+            body (body-json resp)]
+        (is (== 200 (:status resp)))
+        (testing "a repeated delete counts once and removes the entry"
+          (is (= 1 (:applied body)))
+          (is (empty? (index-entry (request app :get "/index" {:user "alice" :accept "application/json"}))))))
+      (finally (d/close conn)))))

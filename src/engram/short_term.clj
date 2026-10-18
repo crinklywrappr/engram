@@ -14,6 +14,7 @@
   half-written note. A create reads nothing before it writes, so it stays a plain
   transaction."
   (:require [datalevin.core :as d]
+            [engram.batch :as batch]
             [engram.search-config :as search-config])
   (:import [java.util UUID Date]))
 
@@ -57,19 +58,28 @@
 
 ;; ---------- writes ----------
 
+(defn- create-tx
+  "The tx-map for one note owned by `user`, carrying the minted `id`. The id string
+  doubles as the `:db/id` tempid, so the map transacts both in a plain transaction
+  and inside a transaction function, where a bare map without a tempid is rejected.
+  The single build path for a new note."
+  [user id {:keys [thought-process text]}]
+  (let [now (Date.)]
+    {:db/id                 (str id)
+     :short-term/id         id
+     :short-term/user       user
+     :short-term/process    thought-process
+     :short-term/text       text
+     :short-term/created-at now
+     :short-term/updated-at now}))
+
 (defn create!
   "Create one short-term note for `user` under `process`. Mint the id, stamp the
   created time and the updated time to now, and return the id string. A create
   reads nothing before it writes, so a plain transaction is atomic."
   [conn user process text]
-  (let [id  (UUID/randomUUID)
-        now (Date.)]
-    (d/transact! conn [{:short-term/id         id
-                        :short-term/user       user
-                        :short-term/process    process
-                        :short-term/text       text
-                        :short-term/created-at now
-                        :short-term/updated-at now}])
+  (let [id (UUID/randomUUID)]
+    (d/transact! conn [(create-tx user id {:thought-process process :text text})])
     (str id)))
 
 (defn- absent! [] (throw (ex-info "no such short-term memory for this user" {::absent true})))
@@ -121,6 +131,24 @@
                     (mapv (fn [eid] [:db/retractEntity eid])
                           (process-eids db user process)))]])]
     (count (into #{} (map :e) (:tx-data report)))))
+
+;; ---------- batch ----------
+
+(defn apply-batch!
+  "Apply a grouped batch of short-term operations for one user in one atomic
+  transaction (see engram.batch). A create mints its id. An update replaces a
+  note's text and restamps its updated time. A delete retracts the note. Return
+  {:ok? true :ids [...] :applied n} on success, or {:ok? false :errors [...]} on
+  failure."
+  [conn user batch]
+  (batch/apply! conn batch
+                (fn [db]
+                  {:resolve   (fn [id] (eid-of db user id))
+                   :create-tx (fn [id p] (create-tx user id p))
+                   :update-tx (fn [eid p] [{:db/id eid
+                                            :short-term/text (:text p)
+                                            :short-term/updated-at (Date.)}])
+                   :delete-tx (fn [eid] [[:db/retractEntity eid]])})))
 
 ;; ---------- reads ----------
 

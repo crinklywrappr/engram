@@ -270,12 +270,29 @@
                  :data {:user user :failed (count entries)}} "batch rejected")
         {:status 422 :body {:errors entries}}))))
 
+(defn- strict-batch-response
+  "The response for a short-term or index batch. On success echo the ids and the
+  applied count. On rejection log and return 422 with the per-op errors. Unlike
+  the memory batch, these errors never carry configurations, so the wire shaping
+  is a plain `errors/->wire` over each."
+  [user result]
+  (if (:ok? result)
+    {:status 200 :body {:ids (:ids result) :applied (:applied result)}}
+    (let [entries (mapv errors/->wire (:errors result))]
+      (t/log! {:level :warn :id ::batch-rejected
+               :data {:user user :failed (count entries)}} "batch rejected")
+      {:status 422 :body {:errors entries}})))
+
 ;; ---------- short-term memory handlers ----------
 
 (defn- short-term-create-handler [conn req]
   (let [user (:engram/user req)
         {:keys [thought-process text]} (get-in req [:parameters :body])]
     {:status 201 :body {:id (short-term/create! conn user thought-process text)}}))
+
+(defn- short-term-batch-handler [conn req]
+  (let [user (:engram/user req)]
+    (strict-batch-response user (short-term/apply-batch! conn user (get-in req [:parameters :body])))))
 
 (defn- short-term-fetch-handler [conn req]
   (let [user (:engram/user req)
@@ -347,6 +364,10 @@
         entry (get-in req [:parameters :body])]
     {:status 201 :body {:id (index/create! conn user entry)}}))
 
+(defn- index-batch-handler [conn req]
+  (let [user (:engram/user req)]
+    (strict-batch-response user (index/apply-batch! conn user (get-in req [:parameters :body])))))
+
 (defn- index-replace-handler [conn req]
   (let [user  (:engram/user req)
         id    (get-in req [:parameters :path :id])
@@ -395,6 +416,10 @@
                :post {:parameters {:body schema/IndexEntryBody}
                       :responses  {201 {:body schema/IdOut}}
                       :handler (fn [req] (index-create-handler conn req))}}]
+    ;; Static path, resolves ahead of /index/:id.
+    ["/index/batch" {:post {:parameters {:body schema/IndexBatchBody}
+                            :responses  {200 {:body schema/BatchOut} 422 {:body schema/BatchError}}
+                            :handler (fn [req] (index-batch-handler conn req))}}]
     ["/index/:id" {:put    {:parameters {:path [:map [:id schema/IdStr]] :body schema/IndexEntryBody}
                             :responses  {200 {:body schema/IdOut} 404 {:body schema/ErrorOut}}
                             :handler (fn [req] (index-replace-handler conn req))}
@@ -449,6 +474,10 @@
                                       :handler (fn [req] (short-term-wipe-handler conn req))}}]
     ["/memories/short-term/search" {:post {:parameters {:query [:map [:thought_process {:optional true} config/Token]]}
                                            :handler (fn [req] (short-term-search-handler conn req))}}]
+    ;; Static path, resolves ahead of /memories/short-term/:id.
+    ["/memories/short-term/batch" {:post {:parameters {:body schema/ShortTermBatchBody}
+                                          :responses  {200 {:body schema/BatchOut} 422 {:body schema/BatchError}}
+                                          :handler (fn [req] (short-term-batch-handler conn req))}}]
     ["/memories/short-term/:id" {:get    {:parameters {:path [:map [:id schema/IdStr]]}
                                           :responses  {200 {:body schema/ShortTermOut} 404 {:body schema/ErrorOut}}
                                           :handler (fn [req] (short-term-fetch-handler conn req))}

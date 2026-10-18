@@ -113,6 +113,19 @@
 (def ShortTermUpdateBody
   [:map [:text [:string {:min 1}]]])
 
+;; /memories/short-term/batch update op. The note id plus the new text.
+(def ShortTermUpdatePayload
+  [:map [:id IdStr] [:text [:string {:min 1}]]])
+
+;; /memories/short-term/batch request. A grouped map of create, update, and delete
+;; operations (ADR 0002). A create is a note, an update a note id and text, and a
+;; delete a note id. A wrong-typed group is a 400 at coercion.
+(def ShortTermBatchBody
+  [:map
+   [:create {:optional true} [:vector ShortTermCreateBody]]
+   [:update {:optional true} [:vector ShortTermUpdatePayload]]
+   [:delete {:optional true} [:vector IdStr]]])
+
 ;; The batch body: a map of grouped operations, each key optional. Order carries
 ;; no meaning across groups (see docs/adr/0002-batch-request-grouped-map.md). A
 ;; wrong-typed group is a malformed request -> 400 at coercion.
@@ -153,6 +166,23 @@
    [:title config/Token]
    [:hook [:string {:min 1}]]
    [:requests [:vector {:min 1} IndexRequest]]])
+
+;; /index/batch update op. The entry id plus a full replacement entry body.
+(def IndexUpdatePayload
+  [:map
+   [:id IdStr]
+   [:title config/Token]
+   [:hook [:string {:min 1}]]
+   [:requests [:vector {:min 1} IndexRequest]]])
+
+;; /index/batch request. A grouped map of create, update, and delete operations
+;; (ADR 0002). A create is an entry body, an update an entry id and a full
+;; replacement body, and a delete an entry id. A wrong-typed group is a 400.
+(def IndexBatchBody
+  [:map
+   [:create {:optional true} [:vector IndexEntryBody]]
+   [:update {:optional true} [:vector IndexUpdatePayload]]
+   [:delete {:optional true} [:vector IdStr]]])
 
 ;; ---------- response schemas (malli coercion -> validated + swagger) ----------
 

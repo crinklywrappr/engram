@@ -13,6 +13,12 @@
   "An id appears in both the update group and the delete group of a batch."
   ::conflict)
 
+;; This code is for the short-term batch and the index batch only, not the memory
+;; batch. The memory batch folds repeated updates; these two reject them.
+(def duplicate-id
+  "An id appears more than once in the update group of a batch."
+  ::duplicate-id)
+
 (def not-found
   "An id names no memory for this user."
   ::not-found)
