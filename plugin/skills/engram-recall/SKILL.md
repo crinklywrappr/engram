@@ -148,15 +148,15 @@ When a task ends, suggest `/decompress` to the user.
 ## Recall: load memories plus their links
 
 A recall loads the memories you select plus every memory linked to them through
-`related`, followed across hops. You select the memories two ways: by their
-category:label pairs, or by a list of ids a search returned.
+`related`, followed across hops. You select the memories three ways: by
+category:label pairs, by a list of ids from a search, or by source names.
 
 Each memory line carries `id`, `content`, and `src`. Non-empty `tags` and
 `related` appear too.
 
 ### Recall by pairs: two calls
 
-1. `ssh engram GET /recalls` returns one row for every category:label pair on your
+1. `ssh engram GET /recalls < /dev/null` returns one row for every category:label pair on your
    memories. The body is `{"recalls": [ ... ]}`. Each entry is a
    positional row `[category, label, count, lifetime, recent]`. The count is how
    many of your memories carry the pair. A pair you never recalled still appears,

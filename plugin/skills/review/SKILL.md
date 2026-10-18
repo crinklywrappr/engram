@@ -119,3 +119,6 @@ even to the memories that score zero.
 - A keep is cheap and reversible on the next run. A correction and a delete are
   not, because engram keeps no history. Show a correction or a delete plainly in
   the menu before the user submits the page.
+- A delete can remove the memory a required index request probes. The index reaps
+  that entry on its own on the next `GET /index`, so a review delete needs no
+  index repair.

@@ -20,8 +20,10 @@ carries no body, so close stdin with `< /dev/null`.
 
 ```bash
 ssh engram GET /memories < /dev/null
+ssh engram GET /index    < /dev/null
 ssh engram GET /config   < /dev/null
 cat batch.json | ssh engram POST /memories/batch
+cat index.json | ssh engram POST /index/batch
 ```
 
 ## Step 1: read every memory
@@ -30,6 +32,10 @@ Run `ssh engram GET /memories < /dev/null`. The response is an NDJSON stream. Th
 first line is a header object. Every line after it is one memory. Each memory
 carries `id`, `content`, and `src`. Non-empty `tags` and `related` appear too.
 Collect all of them.
+
+Run `ssh engram GET /index < /dev/null` too. The body is `{"entries": [ ... ]}`.
+An entry can pin a memory by a source name through a `by-src` request. Keep the
+entries, so Step 5 can repoint a request whose source you change.
 
 ## Step 2: form the pairs and chunk them
 
@@ -97,9 +103,18 @@ own judgment. Repoint the related edges. Any memory whose `related` names a drop
 src must point at the chosen src instead. A repoint swaps one src for another in
 that list, so the list stays the same length.
 
+An index entry can pin a dropped src through a `by-src` request. Repoint that
+request the same way. When the chosen src replaces a dropped src, update the
+request's source list to the chosen src. When the cluster leaves no survivor for a
+pinned src, flag that index entry to the user. Collect the index repoints for the
+review.
+
 Reconcile the tags by judgment. Union the labels for a fact that spans two
-projects. Let a broader label supersede a narrower one, for example `scope:global`
-over `scope:project`. No configuration rule governs this. You decide each case.
+projects. Let a broader label supersede a narrower one. In the sample
+configuration that reads as `scope:global` over `scope:project`. An admin
+configuration can name its categories differently, so read the live configuration
+for the actual names. No configuration rule governs this reconcile. You decide
+each case.
 
 Run `ssh engram GET /config < /dev/null` first to recall the rules. Make sure each
 surviving or new memory satisfies one configuration.
@@ -122,13 +137,20 @@ shape:
   content untouched.
 - `delete` holds the id of every dropped memory.
 
-Show the file. Send nothing to the server yet. Wait for the user to approve.
+When Step 5 collected index repoints, write them to a second review file at
+`~/.claude/projects/<project-slug>/consolidate/index.json`. Use the index batch
+shape with one `update` group. Each update carries the entry `id` and its full
+body with the repointed `by-src` request.
+
+Show the files. Send nothing to the server yet. Wait for the user to approve.
 
 ## Step 7: apply after approval
 
 After the user approves, send the review file as the batch body. `POST
 /memories/batch` with the file on stdin. The file is already in the batch shape,
-so send it with no reformatting.
+so send it with no reformatting. When there is an index review file, send it to
+`POST /index/batch`. Send it after the memory batch returns `HTTP 200`, so the
+repointed requests land once the memories exist.
 
 Read the result. On `HTTP 200` the body is `{"ids":[...],"applied":n}`, and the
 merge is done. If the batch fails, the body is `{"errors":[...]}` with `HTTP 422`.
@@ -143,4 +165,6 @@ file.
 
 - You run the comparison on subagents to save the expensive model's budget. You
   only launch the run, cluster the findings, and confirm the batch.
+- The skill names no fixed category. It reads the live configuration each run, so
+  it survives a configuration change.
 - Prefer fewer, cleaner memories over many near-duplicates.
