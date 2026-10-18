@@ -20,7 +20,7 @@
             [engram.recall-count :as recall-count]
             [engram.recall-count.writer :as rc-writer]
             [integrant.core :as ig]
-            [org.httpkit.server :as hk]
+            [s-exp.enso :as enso]
             [syncopate.core :as sc]))
 
 (defn- data-path [path] (or (System/getenv "ENGRAM_DATA_DIR") path))
@@ -77,8 +77,7 @@
   (handler/app db config tag-writer mem-writer))
 
 (defmethod ig/init-key :engram.web/server [_ {:keys [handler port]}]
-  (hk/run-server handler {:port (parse-long (or (System/getenv "PORT") (str port)))
-                          :legacy-return-value? false}))
+  (enso/run-server handler {:port (parse-long (or (System/getenv "PORT") (str port)))}))
 
 (defmethod ig/halt-key! :engram.web/server [_ server]
-  (hk/server-stop! server))
+  (enso/stop server))
