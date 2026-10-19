@@ -227,15 +227,22 @@
 ;; configuration, a single decimal truncated to four places. :mean-freshness,
 ;; :use-weighted-freshness, and :hot-and-stale-fraction are the ticket-15
 ;; freshness aggregates, each a single decimal truncated to four places.
+;; The last committed flush of a recall-count writer, or null before the first
+;; flush. :at is the flush time. :n is the number of coalesced subjects written.
+(def WriterHealth
+  [:maybe [:map [:at inst?] [:n :int]]])
+
 (def StatsOut
-  [:map [:stats [:map
-                 [:link-density [:map
-                                 [:avg-out-degree number?]
-                                 [:largest-wcc-fraction number?]]]
-                 [:conforming-fraction number?]
-                 [:mean-freshness number?]
-                 [:use-weighted-freshness number?]
-                 [:hot-and-stale-fraction number?]]]])
+  [:map
+   [:stats [:map
+            [:link-density [:map
+                            [:avg-out-degree number?]
+                            [:largest-wcc-fraction number?]]]
+            [:conforming-fraction number?]
+            [:mean-freshness number?]
+            [:use-weighted-freshness number?]
+            [:hot-and-stale-fraction number?]]]
+   [:writers [:map [:tags WriterHealth] [:memories WriterHealth]]]])
 ;; /recalls carries the bare recall rows with no :stats wrapper, each a positional
 ;; tuple [category label count lifetime recent]. The /stats envelope keeps its own
 ;; copy until ticket 08 moves the rows here.

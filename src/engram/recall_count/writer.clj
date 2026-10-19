@@ -20,8 +20,10 @@
 
 (defn- flush-recalls
   "Agent action. Drain the pending recalls to one transaction and reset them. The
-  writer's strategy plans the tx-data from the pending map. On a write failure,
-  keep the pending recalls so the next flush retries the counts."
+  writer's strategy plans the tx-data from the pending map. On success, record the
+  flush time and the coalesced count in `:last-flush`, so a watcher sees a
+  committed flush. On a write failure, keep the pending recalls so the next flush
+  retries the counts."
   [{:keys [pending-recalls] :as state} writer]
   (if (empty? pending-recalls)
     (assoc state :timer nil :first-ms nil)
@@ -33,6 +35,7 @@
         ;; resurrected by a stamp the flush planned against a stale snapshot.
         (d/transact! (:conn writer)
                      [[:db.fn/call (fn [db] (rc/->writes strategy pending-recalls db flush-ms))]])
+        (reset! (:last-flush writer) {:at (java.util.Date. flush-ms) :n (count pending-recalls)})
         (assoc state :pending-recalls {} :timer nil :first-ms nil))
       (catch Throwable e
         (t/log! {:level :warn :id ::flush-failed :error e} "stat flush failed")
@@ -92,6 +95,7 @@
   - `:consumer` is the single-thread daemon executor that applies every action.
   - `:scheduler` is the single-thread daemon executor that fires the flush.
   - `:closed?` prevents writes during shutdown. `drain!` sets it, and it turns the record functions into a no-op.
+  - `:last-flush` is an atom. It holds the last committed flush as `{:at <inst> :n <count>}`, or nil before the first flush. A watcher on it observes a committed flush.
   - `:debounce-ms` is the debounce delay in milliseconds.
   - `:max-wait-ms` is the cap on debounce postponement in milliseconds."
   [conn strategy & {:keys [debounce-ms max-wait-ms]
@@ -104,8 +108,16 @@
      :consumer    (Executors/newSingleThreadExecutor (daemon "engram-stat-consumer"))
      :scheduler   (Executors/newSingleThreadScheduledExecutor (daemon "engram-stat-debounce"))
      :closed?     (atom false)
+     :last-flush  (atom nil)
      :debounce-ms debounce-ms
      :max-wait-ms max-wait-ms}))
+
+(defn last-flush
+  "The last committed flush of `writer`, as `{:at <inst> :n <count>}`, or nil
+  before the first flush. The signal behind the `/stats` writer health, and the
+  point a test watches to know a flush committed."
+  [writer]
+  @(:last-flush writer))
 
 (defn- record*
   "Hand `xs` to the writer's agent to fold through its strategy. Return at once,

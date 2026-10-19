@@ -165,7 +165,7 @@
   [x]
   (/ (Math/floor (* (double x) 10000.0)) 10000.0))
 
-(defn- stats-handler [conn cfg req]
+(defn- stats-handler [conn cfg tag-writer mem-writer req]
   (let [user (:engram/user req)
         agg  (stats/memory-aggregates conn user (tag-reject cfg)
                                       (:freshness-half-life-days cfg)
@@ -175,7 +175,9 @@
                     :conforming-fraction    (trunc4 (:conforming-fraction agg))
                     :mean-freshness         (trunc4 (:mean-freshness agg))
                     :use-weighted-freshness (trunc4 (:use-weighted-freshness agg))
-                    :hot-and-stale-fraction (trunc4 (:hot-and-stale-fraction agg))}}}))
+                    :hot-and-stale-fraction (trunc4 (:hot-and-stale-fraction agg))}
+            :writers {:tags     (rc-writer/last-flush tag-writer)
+                      :memories (rc-writer/last-flush mem-writer)}}}))
 
 (defn- reject-409
   "Log a rejected write and return the 409 body with the current configurations
@@ -404,7 +406,7 @@
                                   :body (cond-> {:configurations (:configurations cfg)}
                                           (:categories cfg) (assoc :categories (:categories cfg)))})}}]
     ["/stats"  {:get {:responses {200 {:body schema/StatsOut}}
-                      :handler (fn [req] (stats-handler conn cfg req))}}]
+                      :handler (fn [req] (stats-handler conn cfg tag-writer mem-writer req))}}]
     ["/recalls" {:get {:parameters {:query [:map [:categories {:optional true} :string]]}
                        :responses  {200 {:body schema/RecallsOut}}
                        :handler (fn [req] (recalls-handler conn cfg req))}}]
