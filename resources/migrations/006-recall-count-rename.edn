@@ -3,17 +3,29 @@
 ;; (ticket 24). The per-memory recall count already lives at :memory/recall-* and
 ;; needs no rename.
 ;;
-;; Three :up steps:
+;; Four :up steps:
 ;;   1. :schema/create the :recall/* attributes and the identity tuple.
 ;;   2. engram.migrations/copy-stat->recall copies each stored row's values onto
 ;;      the same entity, so the tuple rebuilds in place.
-;;   3. :schema/remove the old tuple and the old :stat/* attributes.
+;;   3. engram.migrations/retract-stat-rows clears every :stat/* datom.
+;;   4. :schema/remove the old tuple and the old :stat/* attributes.
+;;
+;; Step 3 exists because a direct :schema/remove of the components collides. The
+;; tuple :stat/user+category+label stays unique while its components exist.
+;; Removing one component makes Datalevin recompute the tuple for every row at
+;; once, with that slot nil. Two rows that share a label but differ by user or
+;; category then collapse to the same tuple value and break the unique
+;; constraint. Step 3 instead retracts each row's components together as data, so
+;; that row's tuple drops straight to all-nil and disappears, while the other
+;; rows keep their distinct tuples. After step 3 the attributes hold no datoms,
+;; so the step 4 removal succeeds.
 ;;
 ;; :transaction? false, so step 1 commits the new schema before step 2 reads it,
-;; and before step 3 drops the old attributes. This avoids a mid-transaction
-;; schema-visibility quirk. :irreversible? true, because the copy and the remove
-;; have no auto-inverse. The cron backup of the data directory is the rollback
-;; path. No attribute is full-text, so the migration triggers no re-index.
+;; and before steps 3 and 4 drop the old data and attributes. This avoids a
+;; mid-transaction schema-visibility quirk. :irreversible? true, because the copy
+;; and the remove have no auto-inverse. The cron backup of the data directory is
+;; the rollback path. No attribute is full-text, so the migration triggers no
+;; re-index.
 {:transaction? false
  :irreversible? true
  :up [{:schema/create {:recall/user     {:db/valueType :db.type/string}
@@ -25,6 +37,7 @@
                        :recall/decayed  {:db/valueType :db.type/double}
                        :recall/last-recalled {:db/valueType :db.type/instant}}}
       engram.migrations/copy-stat->recall
+      engram.migrations/retract-stat-rows
       {:schema/remove [:stat/user+category+label
                        :stat/user :stat/category :stat/label
                        :stat/lifetime :stat/decayed :stat/last-request]}]}

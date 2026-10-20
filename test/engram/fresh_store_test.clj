@@ -102,3 +102,31 @@
             (is (some? (d/q '[:find ?s . :in $ ?t :where [?s :recall/user+category+label ?t]]
                             (d/db conn) ["bob" "tech" "datalevin"])))))
         (finally (d/close conn))))))
+
+(deftest migration-006-handles-rows-sharing-a-label
+  ;; Two :stat/* rows that share a label but differ by category hold distinct
+  ;; identity tuples today. A direct schema removal of the tuple's components
+  ;; recomputes both to the same value and the unique constraint rejects it. The
+  ;; pi carried exactly this shape (project/engram, tech/engram, scope/engram).
+  ;; 006 must retract the rows as data first, so seed the shape and run the real
+  ;; migration set through to the end. Without the retraction step this throws.
+  (testing "006 applies when rows share a label across categories"
+    (let [dir  (.toString (Files/createTempDirectory "engram-006" (make-array FileAttribute 0)))
+          conn (d/get-conn dir)]
+      (try
+        (sc/migrate-all! (sc/store conn) (take 5 migrations/migrations))  ; 001-005: the :stat/* schema
+        (let [d0 (java.util.Date.)]
+          (d/transact! conn [{:stat/user "alice" :stat/category "project" :stat/label "engram"
+                              :stat/lifetime 3 :stat/decayed 1.5 :stat/last-request d0}
+                             {:stat/user "alice" :stat/category "tech" :stat/label "engram"
+                              :stat/lifetime 2 :stat/decayed 1.0 :stat/last-request d0}]))
+        (sc/migrate-all! (sc/store conn) migrations/migrations)           ; 006 + 007
+        (testing "both rows land on :recall/*, one per category, counts preserved"
+          (is (= #{["project" 3] ["tech" 2]}
+                 (set (d/q '[:find ?c ?life :in $ ?u ?l
+                             :where [?e :recall/user ?u] [?e :recall/label ?l]
+                                    [?e :recall/category ?c] [?e :recall/lifetime ?life]]
+                           (d/db conn) "alice" "engram")))))
+        (testing "no :stat/* datom survives"
+          (is (empty? (d/q '[:find ?e :where [?e :stat/label _]] (d/db conn)))))
+        (finally (d/close conn))))))

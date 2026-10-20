@@ -32,3 +32,36 @@
                            [?s :stat/decayed ?dec]
                            [?s :stat/last-request ?last]]
                   db)))]]))
+
+(defn retract-stat-rows
+  "Data-migration step for 006. Retract every `:stat/*` datom, each row's
+  attributes together in one move, so the row's identity tuple drops straight to
+  all-nil and disappears. A direct schema removal would instead strip one
+  component from every row at once. That recompute collapses rows that share a
+  label into one tuple value, and the `:stat/user+category+label` unique
+  constraint rejects the collision. The copy step already put the values on
+  `:recall/*`, so this retraction keeps the recall data. Runs after the copy and
+  before the `:stat/*` attributes are removed. A fresh store carries no rows, so
+  it is a no-op there. The read runs inside the `:db.fn/call` function, so it sees
+  the committed db atomically with the write."
+  [conn]
+  (d/transact!
+   conn
+   [[:db.fn/call
+     (fn [db]
+       (into []
+             (mapcat (fn [[s u c l life dec last]]
+                       [[:db/retract s :stat/user u]
+                        [:db/retract s :stat/category c]
+                        [:db/retract s :stat/label l]
+                        [:db/retract s :stat/lifetime life]
+                        [:db/retract s :stat/decayed dec]
+                        [:db/retract s :stat/last-request last]]))
+             (d/q '[:find ?s ?u ?c ?l ?life ?dec ?last
+                    :where [?s :stat/user ?u]
+                           [?s :stat/category ?c]
+                           [?s :stat/label ?l]
+                           [?s :stat/lifetime ?life]
+                           [?s :stat/decayed ?dec]
+                           [?s :stat/last-request ?last]]
+                  db)))]]))
