@@ -79,3 +79,28 @@ use it to store atomic facts during work.
 
 This step is optional. Without it, the skill still triggers on a memory request.
 With it, Claude loads memory at session start, ahead of your first request.
+
+## The session-start recall backbone
+
+A session starts with two recalls. These two tags cover the memories that matter
+before your first request.
+
+The first tag is `scope:global`. It pulls every cross-project fact: who you are,
+how you work, and reusable technical knowledge. These facts apply on any project.
+
+The second tag names the current project, such as `project:engram`. It pulls the
+facts bound to the project in front of you.
+
+Read the project label set first. Run
+`ssh engram GET "/recalls?categories=project" </dev/null`. The response lists
+every project label you hold memories for. Pick the label of the current project.
+Do not guess a label. A wrong guess recalls nothing.
+
+Treat any further tag as a bonus. Scan another category to find one. Run
+`ssh engram GET "/recalls?categories=domain,tech" </dev/null`. The response lists
+the labels in use for those categories. Pick a label that fits your task and
+recall it.
+
+A tag does not always surface the fact you want. Run a content search as the
+recovery path. `POST /memories/search` with a search string finds a memory by its
+words.

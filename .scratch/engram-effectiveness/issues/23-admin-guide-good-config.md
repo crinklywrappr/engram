@@ -10,20 +10,19 @@ The user-guide piece adds a section to `doc/user-guide.md` on the session-start 
 
 The recall backbone lives in the user guide, not the engram-recall skill. The tags it leans on are admin-defined. A shipped skill cannot assume `scope:global` or `project:current`. The user guide teaches the pattern against the configuration an admin actually mounted.
 
-**Blocked by:** 10 (configuration value sets) and 14 (freshness flag and confirm route) gate the admin-guide half. 08 (recall counts off `/stats`), 11 (recall by tags or search), and 22 (nested boolean recall) gate the user-guide half.
+**Blocked by:** The admin-guide half waits on 10 (configuration value sets) and 14 (freshness flag and confirm route). The user-guide half waits on 08 (recall counts off `/stats`) and 11 (recall by tags or search). It also waits on 22 (nested boolean recall) and 25 (the structured memory index).
 
-**Status:** ready-for-agent
-
-- [ ] A new section follows "The configuration file" in `doc/admin-guide.md`.
-- [ ] The implementing agent reads the live configuration from the running server, not a hand-copied snapshot.
-- [ ] The admin section reproduces that live configuration as the worked example.
-- [ ] The prose explains why `scope` carries a mandatory cardinality.
-- [ ] The prose explains the split into a global-reach configuration and a project-bound configuration.
-- [ ] The prose explains a closed `:one-of` category.
-- [ ] The prose explains why an admin closes a label set.
-- [ ] The prose explains the recall half-life and the staleness half-life.
-- [ ] A new section in `doc/user-guide.md` documents the session-start recall backbone.
-- [ ] The user section recalls `scope:global` and `project:current` at session start.
-- [ ] The user section reads the project label set from `GET /recalls?categories=project` and picks the label rather than guessing.
-- [ ] The user section finds bonus tags with the category filter and names content search as the recovery path.
-- [ ] Every sentence satisfies the blocking lint hook.
+**Status:** done
+- [x] A new section follows "The configuration file" in `doc/admin-guide.md`.
+- [x] The implementing agent reads the live configuration from the running server, not a hand-copied snapshot.
+- [x] The admin section reproduces that live configuration as the worked example.
+- [x] The prose explains why `scope` carries a mandatory cardinality.
+- [x] The prose explains the split into a global-reach configuration and a project-bound configuration.
+- [x] The prose explains a closed `:one-of` category.
+- [x] The prose explains why an admin closes a label set.
+- [x] The prose explains the recall half-life and the staleness half-life.
+- [x] A new section in `doc/user-guide.md` documents the session-start recall backbone.
+- [x] The user section recalls `scope:global` and `project:current` at session start.
+- [x] The user section reads the project label set from `GET /recalls?categories=project` and picks the label rather than guessing.
+- [x] The user section finds bonus tags with the category filter and names content search as the recovery path.
+- [x] Every sentence satisfies the blocking lint hook.

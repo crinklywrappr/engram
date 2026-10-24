@@ -58,14 +58,15 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.versio
 
 ## The configuration file
 
-The admin writes the configuration file and mounts it. The repo ships a sample at
-`deploy/engram-config.example.edn`. Copy it, edit it, and mount your copy. The
-`ENGRAM_CONFIG` environment variable names the container path, and the image sets
-it to `/config/engram-config.edn`.
+The admin writes the configuration file and mounts it. The `ENGRAM_CONFIG`
+environment variable names the container path, and the image sets it to
+`/config/engram-config.edn`. The section below shows a recommended configuration
+to start from.
 
 The file is an EDN map with these keys:
 
-- `:half-life-days` sets the exponential decay for the recent recall count.
+- `:recall-half-life-days` sets the decay for the recent recall count. It defaults to 14.
+- `:freshness-half-life-days` sets the decay for a memory's freshness. It defaults to 30.
 - `:configurations` is a vector of acceptable configurations.
 - `:categories` is optional. It describes each category for the client.
 
@@ -88,13 +89,116 @@ fitting labels.
 Example:
 
 ```clojure
-{:half-life-days 14
+{:recall-half-life-days 14
+ :freshness-half-life-days 30
  :categories
  {"domain" {:description "the broad subject area"
             :examples ["clojure" "databases"]}}
  :configurations
  [{"domain" "+" "project" "*" "tech" "*"}]}
 ```
+
+## A good configuration
+
+The section above teaches the format. This section teaches judgment. The example
+below is a configuration worth starting from, with the reasoning behind its
+shape.
+
+A configuration does more than accept or reject a memory. It shapes how recall
+works. A memory declares its reach with `scope` and its kind with `type`. Those
+two closed tags let a session load every global fact plus the current project,
+with no guess. The choices below follow from that goal.
+
+```clojure
+{:recall-half-life-days 14
+ :freshness-half-life-days 30
+ :categories
+ {"scope"    {:description "the fact's reach: cross-project or bound to one project"
+              :examples ["global" "project"]}
+  "type"     {:description "the kind of fact"
+              :examples ["user" "feedback" "project" "knowledge" "reference"]}
+  "domain"   {:description "the broad subject area"
+              :examples ["clojure" "databases" "git-workflow"]}
+  "project"  {:description "the project slug the fact belongs to"
+              :examples ["engram" "commensura"]}
+  "tech"     {:description "a specific tool, library, or artifact"
+              :examples ["datalevin" "reitit" "malli"]}
+  "activity" {:description "what the fact is about doing"
+              :examples ["debugging" "design" "review"]}
+  "status"   {:description "a life-cycle state, when one applies"
+              :examples ["shipped" "deferred" "resolved"]}}
+ :configurations
+ [{"scope"    {:cardinality "1" :one-of ["global"]}
+   "type"     {:cardinality "1" :one-of ["user" "feedback" "knowledge" "reference"]}
+   "domain"   "+"
+   "tech"     "*"
+   "activity" "*"
+   "status"   "?"}
+  {"scope"    {:cardinality "1" :one-of ["project"]}
+   "project"  "+"
+   "type"     {:cardinality "1" :one-of ["user" "feedback" "project" "knowledge" "reference"]}
+   "domain"   "+"
+   "tech"     "*"
+   "activity" "*"
+   "status"   "?"}]}
+```
+
+### Scope is mandatory
+
+The `scope` category takes a cardinality of `1`. Every memory declares its reach.
+A fact is either global or project-bound, and never neither. The `:one-of` list
+holds exactly `global` and `project`. The author decides reach at write time.
+Recall then leans on this one tag to separate cross-project facts from project
+facts.
+
+### Two configurations
+
+The file holds two configurations. The first fits a global-reach fact. It sets
+`scope` to `global` and names no `project` category, so a global fact carries no
+project tag. A fact about the user or a general technique belongs here. The
+second fits a project-bound fact. It sets `scope` to `project` and asks for at
+least one `project` tag, written `"project" "+"`. A fact about one codebase
+belongs here. A memory is valid once it satisfies either configuration.
+
+### A closed category
+
+The `type` category closes its labels with `:one-of`. The list names the kinds of
+fact. A `user` fact describes the user. A `feedback` fact guides how to work. A
+`project` fact is specific to one project. A `knowledge` fact is a reusable
+technical truth. A `reference` fact points to an external resource. The global
+configuration drops `project` from the list, because a global fact names no
+project.
+
+A closed, mandatory `type` turns the kind of fact into a reliable filter. A
+session can load every `user` and `feedback` fact at the start. The kind sits on
+every memory and comes from a fixed set, so the query never misses one. The
+cardinality of `1` keeps the kind mandatory. The closed list keeps the filter
+meaningful, because a kind never drifts into a near-synonym.
+
+### Close a label set with care
+
+An open category accepts any lowercase kebab-case label. A closed category
+accepts only the labels in its `:one-of` list. When a category's values form a
+small fixed set, such as `scope` or `type`, close it. A closed set blocks a
+near-duplicate label and keeps recall predictable. When a category's values grow
+over time, such as `domain`, `tech`, or `project`, leave it open.
+
+### The two half-lives
+
+The `:recall-half-life-days` value shapes the recent recall count. The example
+sets it to 14. A pair recalled today counts as one. That one decays to one half
+after 14 days. It decays to one quarter after 28 days. A short half-life favors
+recent activity. A long half-life keeps older activity in view. Picture the value
+as the width of your current focus. The 14-day example tracks a two-week thread of
+work.
+
+The `:freshness-half-life-days` value shapes a memory's freshness. The example
+sets it to 30. Freshness measures from the last confirmation of a memory. A
+memory is fresh under one half-life. It ages between one and two half-lives. It
+is stale beyond two. At 30 days a memory stays fresh for 30 days, ages up to 60
+days, then reads as stale. A short half-life asks for frequent reconfirmation. A
+long half-life lets a fact rest. Picture the value as your reconfirmation rhythm.
+The 30-day example asks for a confirmation about once a month.
 
 ## Manage users
 
