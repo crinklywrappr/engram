@@ -21,8 +21,12 @@ The recall backbone lives in the user guide, not the engram-recall skill. The ta
 - [x] The prose explains a closed `:one-of` category.
 - [x] The prose explains why an admin closes a label set.
 - [x] The prose explains the recall half-life and the staleness half-life.
-- [x] A new section in `doc/user-guide.md` documents the session-start recall backbone.
-- [x] The user section recalls `scope:global` and `project:current` at session start.
-- [x] The user section reads the project label set from `GET /recalls?categories=project` and picks the label rather than guessing.
-- [x] The user section finds bonus tags with the category filter and names content search as the recovery path.
+- [ ] A new section in `doc/user-guide.md` documents the session-start recall backbone.
+- [ ] The user section recalls `scope:global` and `project:current` at session start.
+- [ ] The user section reads the project label set from `GET /recalls?categories=project` and picks the label rather than guessing.
+- [ ] The user section finds bonus tags with the category filter and names content search as the recovery path.
 - [x] Every sentence satisfies the blocking lint hook.
+
+## Comments
+
+2026-10-24: On review the user-guide half was dropped. The session-start recall backbone was removed from doc/user-guide.md. The user guide needs no change. Only the admin-guide half ships.
