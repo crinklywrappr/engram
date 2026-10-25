@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `engram.schema` holds every request and response schema, and each schema is public.
 - [ ] `engram.middleware` holds `wrap-user`, `wrap-log`, `wrap-request-id`, the exception handlers, and `exception-mw`, each public.

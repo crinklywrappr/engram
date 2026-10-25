@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] A recall whose match-plus-related result exceeds 32 memories streams all of them over NDJSON.
 - [ ] A regression test seeds more than 32 memories and counts the NDJSON lines.

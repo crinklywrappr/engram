@@ -16,7 +16,7 @@ Two changes to the preview, both in the `migrate` skill:
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The `migrate` skill tells Claude to write the preview as JSON in the
       `{"create": [...]}` batch shape.

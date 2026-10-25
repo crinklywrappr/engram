@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `engram.stats` keeps `decay-factor`, `plan-fetch`, `by-user`, and the `stats` read projection.
 - [ ] `engram.stats.writer` holds the agent, both executors, `writer`, `record!`, `drain!`, `schedule-flush!`, `write-buffer`, `absorb`, and the `closed?` flag.

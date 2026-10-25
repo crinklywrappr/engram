@@ -4,7 +4,7 @@
 
 **Blocked by:** 02, because this uses the renamed `recalls` function and returns a `:recalls` key.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `GET /stats` returns `{:stats {:recalls [row ...]}}`, one entry for each category:label pair.
 - [ ] The `StatsOut` response schema nests the recall rows under `:stats` then `:recalls`.

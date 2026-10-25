@@ -8,7 +8,7 @@ skill first names a cardinality.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The `engram-recall` skill shows all four cardinality symbols with their
       meanings.

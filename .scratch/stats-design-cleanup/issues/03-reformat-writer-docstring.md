@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (the docstring names the accumulator term that 02 settles).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The docstring opens with one header sentence that states what `writer` creates.
 - [ ] A bulleted list names the `debounce-ms` and `max-wait-ms` tuning keys and their defaults.

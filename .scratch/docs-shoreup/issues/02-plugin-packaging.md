@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 Background: a `marketplace add` git-clones the repo that holds `marketplace.json`. When that file lives in the engram repo, the whole project clones. A thin dedicated repo keeps the clone small.
 

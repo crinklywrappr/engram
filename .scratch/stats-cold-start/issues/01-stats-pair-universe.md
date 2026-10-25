@@ -6,6 +6,8 @@ The row becomes a five-element positional tuple: `[category, label, count, lifet
 
 **Blocked by:** None (can start immediately).
 
+**Status:** done
+
 - [ ] `/stats` lists a pair that sits on a memory but was never recalled. The row shows a count of at least 1, a lifetime of 0, and a recent of 0.0.
 - [ ] A recalled pair shows its real lifetime and its decayed recent value.
 - [ ] The count equals the number of memories that carry the pair for that user.

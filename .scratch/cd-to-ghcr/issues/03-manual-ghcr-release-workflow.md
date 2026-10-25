@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The workflow triggers by hand through `workflow_dispatch`.
 - [ ] The checkout uses full depth for a correct commit count.

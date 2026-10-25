@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately). This ticket and 03 both edit the client recall skill, so expect a shared touch there.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `POST /memories/query` becomes `POST /memories/recall`.
 - [ ] `handler/query-handler` becomes `handler/recall-handler`.

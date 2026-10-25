@@ -15,7 +15,7 @@ A prototype settled the shape:
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The loader accepts a configuration that carries an optional `:categories` map.
 - [ ] The loader accepts a configuration that has no `:categories` map, because the map is optional.

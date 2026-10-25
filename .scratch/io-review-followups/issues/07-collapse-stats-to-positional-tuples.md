@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The `/stats` envelope holds a vector of `[category label lifetime recent]` tuples.
 - [ ] The response schema names the tuple shape, not four separate fields.

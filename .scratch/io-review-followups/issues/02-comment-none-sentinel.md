@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The pair lookup carries a comment naming `:none` as the no-related sentinel.
 - [ ] No code behavior changes.

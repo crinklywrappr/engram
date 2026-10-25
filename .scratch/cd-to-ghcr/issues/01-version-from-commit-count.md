@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `build.clj` sets `version` to `1.0.` joined with the commit count from `b/git-count-revs`.
 - [ ] A new build task makes the uberjar and does not run the test suite.

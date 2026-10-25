@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] A recalled memory omits `created-at` and `updated-at`.
 - [ ] The pull pattern no longer reads the two timestamp fields.

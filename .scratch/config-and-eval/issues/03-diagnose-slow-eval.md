@@ -6,7 +6,7 @@ Measure the parts that plausibly dominate: cold REPL require of the main namespa
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The note records timings for a cold require of the main namespaces.
 - [ ] The note records the uberjar boot time to a 200 on `/healthz`.

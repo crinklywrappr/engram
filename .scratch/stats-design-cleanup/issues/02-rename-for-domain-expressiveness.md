@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, because this operates on the split layout. `CONTEXT.md` already carries the `Recall count` term.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `plan-fetch` becomes `plan-recalls`.
 - [ ] The `:buffer` state and its parameters become `pending-recalls`.

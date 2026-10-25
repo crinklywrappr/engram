@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] The Dockerfile has no build stage and copies a prebuilt uberjar from the build context.
 - [ ] The babashka download picks its archive from the target architecture. Both `amd64` and `arm64` resolve to the correct binary.

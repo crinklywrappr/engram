@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `load-config` takes a `default-path` parameter, not `path`.
 - [ ] When `ENGRAM_CONFIG` is set, `load-config` reads that file.

@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `/stats` calls a named `stats-handler`, not an inline function.
 - [ ] The `/stats` response body is the same as before.

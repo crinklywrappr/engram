@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] A recalled memory with no tags and no related links omits those keys.
 - [ ] The NDJSON mapper and the JSON fallback mapper both strip empty and null fields.
